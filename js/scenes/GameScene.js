@@ -127,8 +127,10 @@ export class GameScene extends Phaser.Scene {
     this.heightmap = generateHeightmap(this.seed, WORLD_WIDTH, WORLD_HEIGHT);
     this.terrainPixels = buildTerrainPixels(this.heightmap, WORLD_WIDTH, WORLD_HEIGHT);
 
-    // Create OffscreenCanvas for terrain
-    this.terrainCanvas = new OffscreenCanvas(WORLD_WIDTH, WORLD_HEIGHT);
+    // Create a regular HTMLCanvasElement (OffscreenCanvas not supported by Phaser textures.addCanvas)
+    this.terrainCanvas = document.createElement('canvas');
+    this.terrainCanvas.width  = WORLD_WIDTH;
+    this.terrainCanvas.height = WORLD_HEIGHT;
     this.terrainCtx = this.terrainCanvas.getContext('2d');
 
     this._drawTerrainToCanvas();
@@ -1392,8 +1394,10 @@ export class GameScene extends Phaser.Scene {
 
   shutdown() {
     if (this._pingTimer) this._pingTimer.remove();
-    if (this.wsClient) {
-      this.wsClient.disconnect();
+    if (this.wsClient) this.wsClient.disconnect();
+    // Remove terrain texture so it can be re-created on restart
+    if (this.textures.exists('terrain')) {
+      this.textures.remove('terrain');
     }
   }
 }

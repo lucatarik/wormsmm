@@ -172,22 +172,18 @@ export class MenuScene extends Phaser.Scene {
     const playerName = this._val(this._nameInput, 'Player');
     const seed = Math.floor(Math.random() * 0xffffffff);
 
+    const teams = [
+      { id: 'team-0', name: playerName, color: 0xff4444,
+        worms: [{ id: 'w0-0', name: 'Walker' }, { id: 'w0-1', name: 'Runner' }] },
+      { id: 'team-1', name: 'CPU', color: 0x4488ff,
+        worms: [{ id: 'w1-0', name: 'Jumper' }, { id: 'w1-1', name: 'Blaster' }] },
+    ];
     this.scene.stop('MenuScene');
     this.scene.start('GameScene', {
-      seed,
-      playerId:    'local',
-      playerName,
-      teams: [
-        { id: 'team-0', name: playerName, color: 0xff4444,
-          worms: [{ id: 'w0-0', name: 'Walker' }, { id: 'w0-1', name: 'Runner' }] },
-        { id: 'team-1', name: 'CPU', color: 0x4488ff,
-          worms: [{ id: 'w1-0', name: 'Jumper' }, { id: 'w1-1', name: 'Blaster' }] },
-      ],
-      myTeamIndex: 0,
-      wsClient:    null,
-      singlePlayer: true,
+      seed, playerId: 'local', playerName, teams,
+      myTeamIndex: 0, wsClient: null, singlePlayer: true,
     });
-    this.scene.launch('UIScene', { myTeamIndex: 0 });
+    this.scene.launch('UIScene', { myTeamIndex: 0, teams });
   }
 
   _launch(sync, gameData) {
