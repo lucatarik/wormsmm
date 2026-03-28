@@ -1,5 +1,5 @@
-const CACHE_NAME = 'worms-online-v1';
-const STATIC_CACHE = 'worms-static-v1';
+const CACHE_NAME = 'worms-online-v2';
+const STATIC_CACHE = 'worms-static-v2';
 
 const STATIC_ASSETS = [
   './',
@@ -12,12 +12,12 @@ const STATIC_ASSETS = [
   './js/scenes/MenuScene.js',
   './js/scenes/GameScene.js',
   './js/scenes/UIScene.js',
-  './js/network/WSClient.js',
+  './js/network/RedisSync.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
 
-const CDN_CACHE = 'worms-cdn-v1';
+const CDN_CACHE = 'worms-cdn-v2';
 const CDN_ASSETS = [
   'https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js',
 ];
@@ -42,7 +42,7 @@ self.addEventListener('install', (event) => {
 
 // Activate: clean up old caches
 self.addEventListener('activate', (event) => {
-  const validCaches = [STATIC_CACHE, CDN_CACHE, CACHE_NAME];
+  const validCaches = [STATIC_CACHE, CDN_CACHE, CACHE_NAME, 'worms-static-v1', 'worms-cdn-v1', 'worms-online-v1'];
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
@@ -59,9 +59,10 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET requests and WebSocket connections
+  // Skip non-GET requests, WebSocket connections, and Upstash API calls
   if (request.method !== 'GET') return;
   if (url.protocol === 'ws:' || url.protocol === 'wss:') return;
+  if (url.hostname.includes('upstash.io')) return;
 
   // CDN assets: cache-first
   if (url.hostname === 'cdn.jsdelivr.net') {
