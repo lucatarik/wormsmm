@@ -157,14 +157,21 @@ export class MenuScene extends Phaser.Scene {
     }
 
     localStorage.setItem(LS_NAME_KEY, name);
-    this._status(`Joining room ${roomId}…`, '#ffcc44');
 
     const sync = new RedisSync();
+    this._showJoinOverlay(roomId, () => {
+      sync.disconnect();
+      this._hideJoinOverlay();
+      this._status('Cancelled', '#ff8844');
+      history.replaceState(null, '', window.location.pathname);
+    });
+
     try {
       const gameData = await sync.joinRoom(roomId, name);
-      this._status('Game starting!', '#44ff44');
+      this._hideJoinOverlay();
       this._launch(sync, gameData);
     } catch (err) {
+      this._hideJoinOverlay();
       this._status('Error: ' + err.message, '#ff4444');
       sync.disconnect();
     }
@@ -335,6 +342,141 @@ export class MenuScene extends Phaser.Scene {
       this._overlay = null;
     }
     this.scale.off('resize', this._repositionOverlay, this);
+  }
+
+  // ─────────────────────────────────────────────
+  // Join waiting overlay
+  // ─────────────────────────────────────────────
+
+  _showJoinOverlay(roomId, onCancel) {
+    if (this._joinOverlay) this._hideJoinOverlay();
+
+    const canvas = this.game.canvas;
+    const rect   = canvas.getBoundingClientRect();
+
+    const wrap = document.createElement('div');
+    Object.assign(wrap.style, {
+      position:       'fixed',
+      left:           rect.left + 'px',
+      top:            rect.top  + 'px',
+      width:          rect.width  + 'px',
+      height:         rect.height + 'px',
+      display:        'flex',
+      flexDirection:  'column',
+      alignItems:     'center',
+      justifyContent: 'center',
+      background:     'rgba(10,16,32,0.82)',
+      zIndex:         '300',
+      gap:            '18px',
+    });
+
+    // Spinner (CSS animation via a style tag)
+    const styleId = 'worms-spinner-style';
+    if (!document.getElementById(styleId)) {
+      const s = document.createElement('style');
+      s.id = styleId;
+      s.textContent = `
+        @keyframes worms-spin { to { transform: rotate(360deg); } }
+        @keyframes worms-pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
+        .worms-spinner {
+          width: 52px; height: 52px;
+          border: 5px solid rgba(232,200,109,0.2);
+          border-top-color: #e8c86d;
+          border-radius: 50%;
+          animation: worms-spin 0.9s linear infinite;
+        }
+        .worms-dots span {
+          display:inline-block; width:8px; height:8px;
+          border-radius:50%; background:#e8c86d; margin:0 3px;
+          animation: worms-pulse 1.2s ease-in-out infinite;
+        }
+        .worms-dots span:nth-child(2){ animation-delay:.2s }
+        .worms-dots span:nth-child(3){ animation-delay:.4s }
+      `;
+      document.head.appendChild(s);
+    }
+
+    const spinner = document.createElement('div');
+    spinner.className = 'worms-spinner';
+
+    const title = document.createElement('div');
+    Object.assign(title.style, {
+      color: '#e8c86d', fontFamily: 'Arial Black, Arial',
+      fontSize: Math.round(rect.height * 0.048) + 'px',
+      letterSpacing: '0.1em',
+    });
+    title.textContent = 'JOINING ROOM';
+
+    const codeBadge = document.createElement('div');
+    Object.assign(codeBadge.style, {
+      color: '#ffffff', fontFamily: 'Arial Black, Arial',
+      fontSize: Math.round(rect.height * 0.072) + 'px',
+      letterSpacing: '0.22em',
+      background: 'rgba(232,200,109,0.12)',
+      border: '2px solid rgba(232,200,109,0.4)',
+      borderRadius: '10px',
+      padding: '6px 28px',
+    });
+    codeBadge.textContent = roomId;
+
+    const dots = document.createElement('div');
+    dots.className = 'worms-dots';
+    dots.innerHTML = '<span></span><span></span><span></span>';
+
+    const subText = document.createElement('div');
+    Object.assign(subText.style, {
+      color: '#88aacc', fontFamily: 'Arial', fontSize: Math.round(rect.height * 0.028) + 'px',
+    });
+    subText.textContent = 'Waiting for the host to start the game…';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    Object.assign(cancelBtn.style, {
+      marginTop:    '8px',
+      background:   'transparent',
+      border:       '1px solid #445566',
+      borderRadius: '6px',
+      color:        '#88aacc',
+      fontFamily:   'Arial',
+      fontSize:     Math.round(rect.height * 0.028) + 'px',
+      padding:      '6px 24px',
+      cursor:       'pointer',
+    });
+    cancelBtn.addEventListener('mouseenter', () => { cancelBtn.style.borderColor = '#ff4444'; cancelBtn.style.color = '#ff4444'; });
+    cancelBtn.addEventListener('mouseleave', () => { cancelBtn.style.borderColor = '#445566'; cancelBtn.style.color = '#88aacc'; });
+    cancelBtn.addEventListener('click', onCancel);
+
+    wrap.appendChild(spinner);
+    wrap.appendChild(title);
+    wrap.appendChild(codeBadge);
+    wrap.appendChild(dots);
+    wrap.appendChild(subText);
+    wrap.appendChild(cancelBtn);
+    document.body.appendChild(wrap);
+
+    this._joinOverlay = wrap;
+    this._domEls.push(wrap);
+
+    // Reposition on resize
+    this._joinOverlayResize = () => {
+      const r = canvas.getBoundingClientRect();
+      wrap.style.left   = r.left   + 'px';
+      wrap.style.top    = r.top    + 'px';
+      wrap.style.width  = r.width  + 'px';
+      wrap.style.height = r.height + 'px';
+    };
+    this.scale.on('resize', this._joinOverlayResize);
+  }
+
+  _hideJoinOverlay() {
+    if (this._joinOverlay) {
+      this._joinOverlay.remove();
+      this._joinOverlay = null;
+    }
+    if (this._joinOverlayResize) {
+      this.scale.off('resize', this._joinOverlayResize);
+      this._joinOverlayResize = null;
+    }
   }
 
   // ─────────────────────────────────────────────
