@@ -422,12 +422,15 @@ export class MenuScene extends Phaser.Scene {
     const savedName = localStorage.getItem(LS_NAME_KEY);
     if (savedName && this._nameInput) this._nameInput.value = savedName;
 
-    // Auto-fill room code from URL param: ?room=XXXXXX
-    const params = new URLSearchParams(window.location.search);
+    // Auto-join from URL param: ?room=XXXXXX
+    const params    = new URLSearchParams(window.location.search);
     const roomParam = params.get('room');
-    if (roomParam && this._roomInput) {
-      this._roomInput.value = roomParam.toUpperCase().slice(0, 6);
-      this._status(`Room ${roomParam.toUpperCase()} detected — press JOIN ROOM`, '#44ff88');
+    if (roomParam) {
+      const code = roomParam.toUpperCase().slice(0, 6);
+      if (this._roomInput) this._roomInput.value = code;
+      this._status(`Connecting to room ${code}…`, '#44ff88');
+      // Auto-join after a short delay (lets scene finish rendering)
+      this.time.delayedCall(600, () => this._onJoin());
     }
   }
 
