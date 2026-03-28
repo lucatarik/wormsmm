@@ -1,0 +1,16 @@
+{
+  "name": "worms-online",
+  "version": "1.0.0",
+  "description": "Worms Online - A multiplayer turn-based artillery PWA",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "serve:npx": "npx serve . -p 8080",
+    "generate-icons": "node generate-icons.mjs",
+    "server:dev": "cd server && npm install && npm run dev",
+    "server:start": "cd server && npm start"
+  },
+  "devDependencies": {
+    "canvas": "^2.11.2"
+  }
+}
