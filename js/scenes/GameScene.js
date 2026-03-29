@@ -82,6 +82,14 @@ export class GameScene extends Phaser.Scene {
 
     // Start first turn
     this._startTurn();
+
+    // Ensure the canvas has keyboard focus (DOM inputs from MenuScene steal it)
+    const canvas = this.game.canvas;
+    canvas.setAttribute('tabindex', '1');
+    canvas.style.outline = 'none';
+    canvas.focus();
+    // Re-focus whenever the player clicks the canvas
+    this.input.on('pointerdown', () => canvas.focus());
   }
 
   // ─────────────────────────────────────────────
@@ -135,8 +143,8 @@ export class GameScene extends Phaser.Scene {
 
     this._drawTerrainToCanvas();
 
-    // Register as Phaser texture
-    this.textures.addCanvas('terrain', this.terrainCanvas);
+    // Register as Phaser CanvasTexture and keep reference for refresh
+    this._terrainTexture = this.textures.addCanvas('terrain', this.terrainCanvas);
 
     // Create image from texture
     this.terrainImage = this.add.image(0, 0, 'terrain').setOrigin(0, 0);
@@ -177,9 +185,9 @@ export class GameScene extends Phaser.Scene {
 
     ctx.putImageData(imageData, 0, 0);
 
-    // Refresh Phaser texture if it already exists
-    if (this.textures.exists('terrain')) {
-      this.textures.get('terrain').refresh();
+    // Refresh Phaser CanvasTexture
+    if (this._terrainTexture) {
+      this._terrainTexture.refresh();
     }
   }
 
@@ -460,13 +468,13 @@ export class GameScene extends Phaser.Scene {
       jumped = true;
     }
 
-    // Aim control with W/S
-    if (Phaser.Input.Keyboard.JustDown(this.wasd.up)) {
-      this.aimAngle -= 0.1;
+    // Aim control with W/S — continuous while held
+    if (this.wasd.up.isDown) {
+      this.aimAngle -= 0.03;
       this._sendAction({ type: 'AIM', angle: this.aimAngle });
     }
-    if (Phaser.Input.Keyboard.JustDown(this.wasd.down)) {
-      this.aimAngle += 0.1;
+    if (this.wasd.down.isDown) {
+      this.aimAngle += 0.03;
       this._sendAction({ type: 'AIM', angle: this.aimAngle });
     }
 
