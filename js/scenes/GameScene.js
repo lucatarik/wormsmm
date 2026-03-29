@@ -398,7 +398,7 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-TWO', () => { if (this._isMyTurn()) this._selectWeapon(1); });
     this.input.keyboard.on('keydown-THREE', () => { if (this._isMyTurn()) this._selectWeapon(2); });
 
-    // Mouse/pointer for aiming
+    // Mouse/pointer for aiming — updates local aimAngle only; SYNC in update() handles network
     this.input.on('pointermove', (pointer) => {
       if (this._isMyTurn() && this.turnActive) {
         const worm = this._getActiveWorm();
@@ -407,7 +407,6 @@ export class GameScene extends Phaser.Scene {
           const wy = pointer.worldY - worm.y;
           this.aimAngle = Math.atan2(wy, wx);
           if (wx !== 0) worm.facing = wx > 0 ? 1 : -1;
-          this._sendAction({ type: 'AIM', angle: this.aimAngle });
         }
       }
     });
@@ -471,11 +470,9 @@ export class GameScene extends Phaser.Scene {
     // Aim control with W/S — continuous while held
     if (this.wasd.up.isDown) {
       this.aimAngle -= 0.03;
-      this._sendAction({ type: 'AIM', angle: this.aimAngle });
     }
     if (this.wasd.down.isDown) {
       this.aimAngle += 0.03;
-      this._sendAction({ type: 'AIM', angle: this.aimAngle });
     }
 
     // Camera pan during opponent turn
@@ -485,8 +482,23 @@ export class GameScene extends Phaser.Scene {
       if (this.wasd.camRight.isDown) this.cameras.main.scrollX += camSpeed;
     }
 
-    if (moved) this._sendAction({ type: 'MOVE', dir: worm.vx > 0 ? 'right' : 'left' });
-    if (jumped) this._sendAction({ type: 'JUMP' });
+    if (moved) {
+      this._sendAction({ type: 'MOVE', dir: worm.vx > 0 ? 'right' : 'left', x: worm.x, y: worm.y });
+    } else if (this._prevMoved) {
+      // Key released → tell opponent to stop
+      this._sendAction({ type: 'STOP', x: worm.x, y: worm.y });
+    }
+    this._prevMoved = moved;
+
+    if (jumped) this._sendAction({ type: 'JUMP', x: worm.x, y: worm.y });
+
+    // Throttled position+aim sync so the opponent always has fresh state (max 1 per 120 ms)
+    const now = this.time.now;
+    if (!this._lastSyncSent || now - this._lastSyncSent >= 120) {
+      this._lastSyncSent = now;
+      this._sendAction({ type: 'SYNC', x: worm.x, y: worm.y, vx: worm.vx, vy: worm.vy,
+        facing: worm.facing, aim: this.aimAngle });
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -546,6 +558,7 @@ export class GameScene extends Phaser.Scene {
         angle: this.aimAngle,
         x: worm.x,
         y: worm.y,
+        wind: this.wind,
       });
     }
   }
@@ -615,7 +628,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   _randomWind() {
-    return (Math.random() - 0.5) * 10;
+    // Must be deterministic so both clients get identical wind each turn.
+    // Mix seed + turnCount into mulberry32 so it's reproducible.
+    const rng = mulberry32((this.seed ^ (this.turnCount * 2654435761)) >>> 0);
+    return (rng() - 0.5) * 10;
   }
 
   _getActiveWorm() {
@@ -1338,6 +1354,15 @@ export class GameScene extends Phaser.Scene {
 
   _sendAction(data) {
     if (!this.wsClient || !this.gameData.roomId) return;
+    // Throttle high-frequency messages so they don't flood the Redis queue and
+    // block critical messages like FIRE. AIM/MOVE/SYNC: max 1 per 100 ms.
+    const HF = { AIM: 1, MOVE: 1, SYNC: 1 };
+    if (HF[data.type]) {
+      const now = Date.now();
+      if (!this._hfSent) this._hfSent = {};
+      if ((now - (this._hfSent[data.type] || 0)) < 100) return;
+      this._hfSent[data.type] = now;
+    }
     this.wsClient.send({
       type: 'action',
       roomId: this.gameData.roomId,
@@ -1371,6 +1396,8 @@ export class GameScene extends Phaser.Scene {
         const vx = Math.cos(data.angle) * weapon.speed;
         const vy = Math.sin(data.angle) * weapon.speed;
         this.aimAngle = data.angle;
+        // Apply authoritative wind from sender so trajectories are identical
+        if (data.wind !== undefined) this.wind = data.wind;
         this._createProjectile(data.x, data.y, vx, vy, weapon, this.currentTeamIndex);
         this.fired = true;
         break;
@@ -1383,6 +1410,21 @@ export class GameScene extends Phaser.Scene {
 
       case 'END_TURN':
         this._endTurn();
+        break;
+
+      case 'SYNC':
+        // Authoritative position snapshot from the active player
+        worm.x = data.x;
+        worm.y = data.y;
+        worm.vx = data.vx ?? 0;
+        worm.vy = data.vy ?? worm.vy;
+        worm.facing = data.facing ?? worm.facing;
+        if (data.aim !== undefined) this.aimAngle = data.aim;
+        break;
+
+      case 'STOP':
+        worm.vx = 0;
+        if (data.x !== undefined) { worm.x = data.x; worm.y = data.y; }
         break;
     }
   }

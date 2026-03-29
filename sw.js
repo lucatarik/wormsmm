@@ -1,5 +1,5 @@
-const CACHE_NAME = 'worms-online-v2';
-const STATIC_CACHE = 'worms-static-v2';
+const CACHE_NAME = 'worms-online-v3';
+const STATIC_CACHE = 'worms-static-v3';
 
 const STATIC_ASSETS = [
   './',
@@ -13,11 +13,12 @@ const STATIC_ASSETS = [
   './js/scenes/GameScene.js',
   './js/scenes/UIScene.js',
   './js/network/RedisSync.js',
+  './js/network/P2PSync.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
 
-const CDN_CACHE = 'worms-cdn-v2';
+const CDN_CACHE = 'worms-cdn-v3';
 const CDN_ASSETS = [
   'https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js',
 ];
@@ -42,7 +43,7 @@ self.addEventListener('install', (event) => {
 
 // Activate: clean up old caches
 self.addEventListener('activate', (event) => {
-  const validCaches = [STATIC_CACHE, CDN_CACHE, CACHE_NAME, 'worms-static-v1', 'worms-cdn-v1', 'worms-online-v1'];
+  const validCaches = [STATIC_CACHE, CDN_CACHE, CACHE_NAME, 'worms-static-v2', 'worms-cdn-v2', 'worms-online-v2', 'worms-static-v1', 'worms-cdn-v1', 'worms-online-v1'];
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
