@@ -85,6 +85,11 @@ async function rPop(key) {
 // ─────────────────────────────────────────────
 
 export class RedisSync {
+  /** Generate a room ID without constructing an instance (for pre-showing the link). */
+  static generateRoomId() {
+    return roomId6();
+  }
+
   constructor() {
     this.playerId     = uid();
     this.roomId       = null;
@@ -129,9 +134,13 @@ export class RedisSync {
    * Returns a Promise that resolves with game-start data once opponent joins.
    * Calls onRoomCreated(roomId) immediately so the UI can show the code.
    */
-  createRoom(playerName, onRoomCreated) {
+  /**
+   * @param {string} playerName
+   * @param {string} [presetRoomId] - optional pre-generated ID (so the link is known before calling this)
+   */
+  createRoom(playerName, presetRoomId) {
     return new Promise(async (resolve, reject) => {
-      const roomId = roomId6();
+      const roomId = presetRoomId || roomId6();
       const seed   = Math.floor(Math.random() * 0xffffffff);
       const teams  = defaultTeams(playerName);
 
@@ -141,7 +150,7 @@ export class RedisSync {
       // Write room info
       await rSet(`room:${roomId}:info`, { seed, teams, createdAt: Date.now() });
 
-      if (onRoomCreated) onRoomCreated(roomId);
+      // (no callback needed — caller already knows the roomId)
 
       // Poll for guest
       const deadline = Date.now() + JOIN_WAIT;
