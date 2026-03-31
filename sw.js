@@ -1,5 +1,5 @@
-const CACHE_NAME = 'worms-online-v3';
-const STATIC_CACHE = 'worms-static-v3';
+const CACHE_NAME = 'worms-online-v4';
+const STATIC_CACHE = 'worms-static-v4';
 
 const STATIC_ASSETS = [
   './',
@@ -12,15 +12,16 @@ const STATIC_ASSETS = [
   './js/scenes/MenuScene.js',
   './js/scenes/GameScene.js',
   './js/scenes/UIScene.js',
-  './js/network/RedisSync.js',
   './js/network/P2PSync.js',
+  './js/network/PeerJSSync.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
 
-const CDN_CACHE = 'worms-cdn-v3';
+const CDN_CACHE = 'worms-cdn-v4';
 const CDN_ASSETS = [
   'https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js',
+  'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js',
 ];
 
 // Install: cache all static assets and CDN assets
@@ -43,7 +44,7 @@ self.addEventListener('install', (event) => {
 
 // Activate: clean up old caches
 self.addEventListener('activate', (event) => {
-  const validCaches = [STATIC_CACHE, CDN_CACHE, CACHE_NAME, 'worms-static-v2', 'worms-cdn-v2', 'worms-online-v2', 'worms-static-v1', 'worms-cdn-v1', 'worms-online-v1'];
+  const validCaches = [STATIC_CACHE, CDN_CACHE, CACHE_NAME, 'worms-static-v3', 'worms-cdn-v3', 'worms-online-v3', 'worms-static-v2', 'worms-cdn-v2', 'worms-online-v2', 'worms-static-v1', 'worms-cdn-v1', 'worms-online-v1'];
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
@@ -60,13 +61,12 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET requests, WebSocket connections, and Upstash API calls
+  // Skip non-GET requests and WebSocket connections
   if (request.method !== 'GET') return;
   if (url.protocol === 'ws:' || url.protocol === 'wss:') return;
-  if (url.hostname.includes('upstash.io')) return;
 
   // CDN assets: cache-first
-  if (url.hostname === 'cdn.jsdelivr.net') {
+  if (url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'unpkg.com') {
     event.respondWith(
       caches.open(CDN_CACHE).then((cache) => {
         return cache.match(request).then((cached) => {

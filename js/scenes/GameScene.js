@@ -35,6 +35,58 @@ const WEAPONS = {
     projectileKey: 'projectile-grenade',
     ammo: 3,
   },
+  cluster: {
+    name: 'Cluster',
+    key: 'cluster',
+    speed: 11,
+    gravity: 0.18,
+    windFactor: 0.5,
+    explodeRadius: 30,
+    damage: 20,
+    fuse: 2500,
+    projectileKey: 'projectile-grenade',
+    ammo: 2,
+    isCluster: true,
+  },
+  shotgun: {
+    name: 'Shotgun',
+    key: 'shotgun',
+    speed: 15,
+    gravity: 0.3,
+    windFactor: 0.1,
+    explodeRadius: 25,
+    damage: 15,
+    fuse: null,
+    projectileKey: 'projectile-bazooka',
+    ammo: 2,
+    pellets: 6,
+    spread: 0.25,
+  },
+  airstrike: {
+    name: 'Air Strike',
+    key: 'airstrike',
+    speed: 0,
+    gravity: 0,
+    windFactor: 0,
+    explodeRadius: 55,
+    damage: 45,
+    fuse: null,
+    projectileKey: 'projectile-bazooka',
+    ammo: 1,
+    isAirstrike: true,
+  },
+  dynamite: {
+    name: 'Dynamite',
+    key: 'dynamite',
+    placed: true,
+    explodeRadius: 70,
+    damage: 60,
+    armTime: 5000,
+    triggerRadius: 0,
+    projectileKey: 'mine',
+    ammo: 1,
+    fuse: 5000,
+  },
   mine: {
     name: 'Mine',
     key: 'mine',
@@ -46,9 +98,15 @@ const WEAPONS = {
     projectileKey: 'mine',
     ammo: 2,
   },
+  hook: {
+    name: 'Hook',
+    key: 'hook',
+    isHook: true,
+    ammo: Infinity,
+  },
 };
 
-const WEAPON_ORDER = ['bazooka', 'grenade', 'mine'];
+const WEAPON_ORDER = ['bazooka', 'grenade', 'cluster', 'shotgun', 'airstrike', 'dynamite', 'mine'];
 
 /**
  * GameScene - The main gameplay scene with terrain, worms, weapons, physics, and networking.
@@ -79,6 +137,9 @@ export class GameScene extends Phaser.Scene {
     this._setupTurnManager();
     this._setupNetworking();
     this._setupEventBridge();
+
+    // Hook state
+    this._hook = { active: false, x: 0, y: 0, vx: 0, vy: 0, attached: false, sprite: null, ropeGfx: null };
 
     // Start first turn
     this._startTurn();
@@ -257,7 +318,7 @@ export class GameScene extends Phaser.Scene {
         name: teamData.name,
         color: teamData.color,
         worms: [],
-        ammo: { bazooka: Infinity, grenade: 3, mine: 2 },
+        ammo: { bazooka: Infinity, grenade: 3, cluster: 2, shotgun: 2, airstrike: 1, dynamite: 1, mine: 2 },
       };
 
       for (let wi = 0; wi < teamData.worms.length; wi++) {
@@ -369,6 +430,30 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  _updateCameraEdgeScroll() {
+    const worm = this._getActiveWorm();
+    if (!worm || !worm.alive || !this.cameraFollowing) return;
+
+    const cam = this.cameras.main;
+    const margin = 180;
+    const speed = 5;
+
+    // Convert worm world coords to screen coords
+    const screenX = (worm.x - cam.scrollX) * cam.zoom;
+    const screenY = (worm.y - cam.scrollY) * cam.zoom;
+    const W = cam.width;
+    const H = cam.height;
+
+    if (screenX < margin) cam.scrollX -= speed;
+    else if (screenX > W - margin) cam.scrollX += speed;
+    if (screenY < margin) cam.scrollY -= speed;
+    else if (screenY > H - margin) cam.scrollY += speed;
+
+    // Clamp to world bounds
+    cam.scrollX = Phaser.Math.Clamp(cam.scrollX, 0, WORLD_WIDTH - W / cam.zoom);
+    cam.scrollY = Phaser.Math.Clamp(cam.scrollY, 0, WORLD_HEIGHT - H / cam.zoom);
+  }
+
   // ─────────────────────────────────────────────
   // Input
   // ─────────────────────────────────────────────
@@ -382,21 +467,53 @@ export class GameScene extends Phaser.Scene {
       w1: Phaser.Input.Keyboard.KeyCodes.ONE,
       w2: Phaser.Input.Keyboard.KeyCodes.TWO,
       w3: Phaser.Input.Keyboard.KeyCodes.THREE,
+      w4: Phaser.Input.Keyboard.KeyCodes.FOUR,
+      w5: Phaser.Input.Keyboard.KeyCodes.FIVE,
+      w6: Phaser.Input.Keyboard.KeyCodes.SIX,
+      w7: Phaser.Input.Keyboard.KeyCodes.SEVEN,
       camLeft: Phaser.Input.Keyboard.KeyCodes.A,
       camRight: Phaser.Input.Keyboard.KeyCodes.D,
+      hookKey: Phaser.Input.Keyboard.KeyCodes.G,
     });
 
     // Fire on spacebar
     this.input.keyboard.on('keydown-SPACE', () => {
-      if (this._isMyTurn() && this.turnActive && !this.fired) {
+      if (!this._isMyTurn() || !this.turnActive || this.fired) return;
+      const weapon = this.currentWeapon;
+      if (weapon && weapon.isHook) {
+        this._fireHook();
+      } else {
         this._fire();
       }
     });
 
-    // Weapon selection
-    this.input.keyboard.on('keydown-ONE', () => { if (this._isMyTurn()) this._selectWeapon(0); });
-    this.input.keyboard.on('keydown-TWO', () => { if (this._isMyTurn()) this._selectWeapon(1); });
+    // Weapon selection keys 1-7
+    this.input.keyboard.on('keydown-ONE',   () => { if (this._isMyTurn()) this._selectWeapon(0); });
+    this.input.keyboard.on('keydown-TWO',   () => { if (this._isMyTurn()) this._selectWeapon(1); });
     this.input.keyboard.on('keydown-THREE', () => { if (this._isMyTurn()) this._selectWeapon(2); });
+    this.input.keyboard.on('keydown-FOUR',  () => { if (this._isMyTurn()) this._selectWeapon(3); });
+    this.input.keyboard.on('keydown-FIVE',  () => { if (this._isMyTurn()) this._selectWeapon(4); });
+    this.input.keyboard.on('keydown-SIX',   () => { if (this._isMyTurn()) this._selectWeapon(5); });
+    this.input.keyboard.on('keydown-SEVEN', () => { if (this._isMyTurn()) this._selectWeapon(6); });
+
+    // G key for hook
+    this.input.keyboard.on('keydown-G', () => {
+      if (this._isMyTurn() && this.turnActive) {
+        this._fireHook();
+      }
+    });
+
+    // Cycle weapons with Q/E
+    this.input.keyboard.on('keydown-Q', () => {
+      if (this._isMyTurn()) {
+        this._selectWeapon((this.currentWeaponIndex - 1 + WEAPON_ORDER.length) % WEAPON_ORDER.length);
+      }
+    });
+    this.input.keyboard.on('keydown-E', () => {
+      if (this._isMyTurn()) {
+        this._selectWeapon((this.currentWeaponIndex + 1) % WEAPON_ORDER.length);
+      }
+    });
 
     // Mouse/pointer for aiming — updates local aimAngle only; SYNC in update() handles network
     this.input.on('pointermove', (pointer) => {
@@ -530,6 +647,8 @@ export class GameScene extends Phaser.Scene {
     if (!worm || !worm.alive) return;
 
     const weapon = this.currentWeapon;
+    if (!weapon || weapon.isHook) return;
+
     const ammo = this.weaponAmmo[weapon.key];
     if (ammo !== Infinity && ammo <= 0) {
       this._selectWeapon(0); // Fall back to bazooka
@@ -543,10 +662,39 @@ export class GameScene extends Phaser.Scene {
     this.fired = true;
     this.cameraFollowing = false;
 
-    if (weapon.placed) {
-      this._placeMine(worm.x, worm.y);
-      this._sendAction({ type: 'PLACE_MINE', x: worm.x, y: worm.y });
+    if (weapon.isAirstrike) {
+      // Mark target X position and spawn bombs from above
+      const targetX = worm.x + Math.cos(this.aimAngle) * 200;
+      this._sendAction({
+        type: 'FIRE',
+        weapon: weapon.key,
+        angle: this.aimAngle,
+        x: worm.x,
+        y: worm.y,
+        wind: this.wind,
+      });
+      this._doAirstrike(targetX, weapon, worm.teamIndex);
+    } else if (weapon.placed) {
+      this._placeMine(worm.x, worm.y, weapon);
+      this._sendAction({ type: 'PLACE_MINE', x: worm.x, y: worm.y, weaponKey: weapon.key });
       this.time.delayedCall(500, () => this._endTurn());
+    } else if (weapon.pellets) {
+      // Shotgun: fire multiple pellets with spread
+      for (let p = 0; p < weapon.pellets; p++) {
+        const spread = (Math.random() - 0.5) * weapon.spread;
+        const angle = this.aimAngle + spread;
+        const vx = Math.cos(angle) * weapon.speed;
+        const vy = Math.sin(angle) * weapon.speed;
+        this._createProjectile(worm.x, worm.y, vx, vy, weapon, worm.teamIndex);
+      }
+      this._sendAction({
+        type: 'FIRE',
+        weapon: weapon.key,
+        angle: this.aimAngle,
+        x: worm.x,
+        y: worm.y,
+        wind: this.wind,
+      });
     } else {
       const vx = Math.cos(this.aimAngle) * weapon.speed;
       const vy = Math.sin(this.aimAngle) * weapon.speed;
@@ -559,6 +707,19 @@ export class GameScene extends Phaser.Scene {
         x: worm.x,
         y: worm.y,
         wind: this.wind,
+      });
+    }
+  }
+
+  _doAirstrike(targetX, weapon, ownerTeamIndex) {
+    const bombCount = 3;
+    for (let i = 0; i < bombCount; i++) {
+      const offsetX = (i - 1) * 40;
+      this.time.delayedCall(1000 + i * 200, () => {
+        if (this.gameOver) return;
+        const bx = targetX + offsetX;
+        const by = -30;
+        this._createProjectile(bx, by, 0, 8, weapon, ownerTeamIndex);
       });
     }
   }
@@ -584,17 +745,20 @@ export class GameScene extends Phaser.Scene {
     return proj;
   }
 
-  _placeMine(x, y) {
+  _placeMine(x, y, weaponOverride) {
+    const weapon = weaponOverride || WEAPONS.mine;
     const surfaceY = this._findGroundBelow(x, y);
-    const sprite = this.add.image(x, surfaceY - 4, 'mine').setDepth(12);
+    const sprite = this.add.image(x, surfaceY - 4, weapon.projectileKey || 'mine').setDepth(12);
 
     const mine = {
       x,
       y: surfaceY - 4,
       sprite,
+      weapon,
       armed: false,
       alive: true,
-      armTimer: this.time.now + WEAPONS.mine.armTime,
+      armTimer: this.time.now + (weapon.armTime || WEAPONS.mine.armTime),
+      fuseTimer: weapon.fuse ? this.time.now + weapon.fuse : null,
       pulseTime: 0,
       ownerTeamIndex: this.currentTeamIndex,
     };
@@ -612,6 +776,97 @@ export class GameScene extends Phaser.Scene {
       if (this.terrainPixels[y * WORLD_WIDTH + ix] === 1) return y;
     }
     return WORLD_HEIGHT - 1;
+  }
+
+  // ─────────────────────────────────────────────
+  // Grappling Hook
+  // ─────────────────────────────────────────────
+
+  _fireHook() {
+    const worm = this._getActiveWorm();
+    if (!worm) return;
+
+    if (this._hook.active && this._hook.attached) {
+      // Release hook
+      this._releaseHook();
+      return;
+    }
+
+    if (this._hook.active) return;
+
+    const speed = 18;
+    this._hook.active = true;
+    this._hook.attached = false;
+    this._hook.x = worm.x;
+    this._hook.y = worm.y;
+    this._hook.vx = Math.cos(this.aimAngle) * speed;
+    this._hook.vy = Math.sin(this.aimAngle) * speed;
+    this._hook.sprite = this.add.circle(worm.x, worm.y, 4, 0xcccccc).setDepth(20);
+    this._hook.ropeGfx = this.add.graphics().setDepth(19);
+
+    // Send action
+    this._sendAction({ type: 'HOOK_FIRE', angle: this.aimAngle, x: worm.x, y: worm.y });
+  }
+
+  _releaseHook() {
+    if (this._hook.sprite) { this._hook.sprite.destroy(); this._hook.sprite = null; }
+    if (this._hook.ropeGfx) { this._hook.ropeGfx.destroy(); this._hook.ropeGfx = null; }
+    this._hook.active = false;
+    this._hook.attached = false;
+    this._sendAction({ type: 'HOOK_RELEASE' });
+  }
+
+  _updateHook() {
+    if (!this._hook.active) return;
+    const worm = this._getActiveWorm();
+    if (!worm) return;
+
+    if (!this._hook.attached) {
+      // Move hook
+      this._hook.vy += 0.3;
+      this._hook.x += this._hook.vx;
+      this._hook.y += this._hook.vy;
+
+      if (this._hook.sprite) this._hook.sprite.setPosition(this._hook.x, this._hook.y);
+
+      // Check terrain attachment
+      if (this.isSolid(this._hook.x, this._hook.y) || this._hook.y > WORLD_HEIGHT) {
+        this._hook.attached = true;
+        this._hook.vx = 0;
+        this._hook.vy = 0;
+      }
+
+      // Out of bounds
+      if (this._hook.x < 0 || this._hook.x > WORLD_WIDTH || this._hook.y < -200) {
+        this._releaseHook();
+        return;
+      }
+    }
+
+    if (this._hook.attached) {
+      // Swing physics: pull worm toward hook point
+      const dx = this._hook.x - worm.x;
+      const dy = this._hook.y - worm.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 10) {
+        const ropeLength = Math.min(dist, 120); // max rope length
+        if (dist > ropeLength) {
+          const pull = (dist - ropeLength) / dist;
+          worm.vx += dx * pull * 0.15;
+          worm.vy += dy * pull * 0.15;
+        }
+        // Damping
+        worm.vx *= 0.98;
+        worm.vy *= 0.98;
+      }
+
+      // Draw rope
+      if (this._hook.ropeGfx) {
+        this._hook.ropeGfx.clear();
+        this._hook.ropeGfx.lineStyle(1.5, 0xaaaaaa, 0.9);
+        this._hook.ropeGfx.lineBetween(worm.x, worm.y, this._hook.x, this._hook.y);
+      }
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -650,6 +905,9 @@ export class GameScene extends Phaser.Scene {
     this.trackedProjectile = null;
     this.cameraFollowing = true;
     this.aiThinking = false;
+
+    // Release hook at turn start
+    this._releaseHook();
 
     // New wind each turn
     this.wind = this._randomWind();
@@ -749,9 +1007,18 @@ export class GameScene extends Phaser.Scene {
 
   _endTurn() {
     if (!this.turnActive) return;
+
+    // Notify opponent (only if it's our turn)
+    if (this.wsClient && this.gameData.roomId && this._isMyTurn()) {
+      this._sendAction({ type: 'END_TURN' });
+    }
+
     this.turnActive = false;
     this.fired = false;
     this.trackedProjectile = null;
+
+    // Release hook on turn end
+    this._releaseHook();
 
     // Wait for projectiles to settle
     const checkSettle = () => {
@@ -860,6 +1127,8 @@ export class GameScene extends Phaser.Scene {
     if (this.gameOver) return;
 
     this._handleMovementInput();
+    this._updateCameraEdgeScroll();
+    this._updateHook();
     this._updateWorms(delta);
     this._updateProjectiles(delta);
     this._updateMines(time);
@@ -961,7 +1230,7 @@ export class GameScene extends Phaser.Scene {
       // Draw trail
       this._drawProjectileTrail(proj);
 
-      // Fuse check (grenade)
+      // Fuse check (grenade/cluster)
       if (proj.weapon.fuse && this.time.now >= proj.fuseTimer) {
         this._explode(proj.x, proj.y, proj.weapon, proj.ownerTeamIndex);
         this._destroyProjectile(proj, i);
@@ -1021,6 +1290,13 @@ export class GameScene extends Phaser.Scene {
       this.trackedProjectile = null;
       this.cameraFollowing = true;
     }
+
+    // End turn after all projectiles settle
+    this.time.delayedCall(600, () => {
+      if (this.turnActive && this.fired && !this.projectiles.some(p => p.alive)) {
+        this._endTurn();
+      }
+    });
   }
 
   _updateMines(time) {
@@ -1029,6 +1305,16 @@ export class GameScene extends Phaser.Scene {
 
       if (!mine.armed && time >= mine.armTimer) {
         mine.armed = true;
+      }
+
+      // Fuse-based detonation (dynamite)
+      if (mine.fuseTimer && time >= mine.fuseTimer) {
+        const w = mine.weapon || WEAPONS.mine;
+        this._explode(mine.x, mine.y, w, mine.ownerTeamIndex);
+        mine.alive = false;
+        mine.sprite.destroy();
+        if (mine.indicator) mine.indicator.destroy();
+        continue;
       }
 
       // Pulse indicator
@@ -1046,13 +1332,15 @@ export class GameScene extends Phaser.Scene {
 
       if (!mine.armed) continue;
 
-      // Trigger check
+      // Trigger check (only for mines with triggerRadius > 0)
+      const w = mine.weapon || WEAPONS.mine;
+      if (!w.triggerRadius) continue;
+
       for (const worm of this.allWorms) {
         if (!worm.alive) continue;
-        // Don't trigger on owner team immediately (only after armed)
         const dist = Math.hypot(worm.x - mine.x, worm.y - mine.y);
-        if (dist < WEAPONS.mine.triggerRadius) {
-          this._explode(mine.x, mine.y, WEAPONS.mine, mine.ownerTeamIndex);
+        if (dist < w.triggerRadius) {
+          this._explode(mine.x, mine.y, w, mine.ownerTeamIndex);
           mine.alive = false;
           mine.sprite.destroy();
           if (mine.indicator) mine.indicator.destroy();
@@ -1092,6 +1380,17 @@ export class GameScene extends Phaser.Scene {
           worm.vy += Math.sin(angle) * falloff * 8 - 3;
           this._applyDamageToWorm(worm, dmg, true);
         }
+      }
+    }
+
+    // Cluster sub-projectiles
+    if (weapon.isCluster) {
+      for (let i = 0; i < 5; i++) {
+        const angle = (Math.PI * 2 * i / 5) - Math.PI / 2;
+        const miniWeapon = { ...WEAPONS.grenade, explodeRadius: 25, damage: 15, fuse: 1500, speed: 5 };
+        const vx2 = Math.cos(angle) * 4;
+        const vy2 = Math.sin(angle) * 4 - 2;
+        this._createProjectile(cx, cy, vx2, vy2, miniWeapon, ownerTeamIndex);
       }
     }
 
@@ -1314,14 +1613,14 @@ export class GameScene extends Phaser.Scene {
     this.events.emit('timerUpdate', { remaining, pct });
 
     // Auto end turn when time runs out
-    if (remaining <= 0 && this._isMyTurn()) {
-      if (!this.fired) {
+    if (remaining <= 0) {
+      // Only the active player ends the turn (sends END_TURN to opponent)
+      if (this._isMyTurn() && !this.fired) {
+        this._endTurn();
+      } else if (this.isSinglePlayer && !this._isMyTurn() && !this.fired && !this.aiThinking) {
         this._endTurn();
       }
-    } else if (remaining <= 0 && this.isSinglePlayer && !this._isMyTurn()) {
-      if (!this.fired && !this.aiThinking) {
-        this._endTurn();
-      }
+      // In multiplayer, passive player waits for END_TURN message - do NOT call _endTurn()
     }
   }
 
@@ -1354,8 +1653,8 @@ export class GameScene extends Phaser.Scene {
 
   _sendAction(data) {
     if (!this.wsClient || !this.gameData.roomId) return;
-    // Throttle high-frequency messages so they don't flood the Redis queue and
-    // block critical messages like FIRE. AIM/MOVE/SYNC: max 1 per 100 ms.
+    // Throttle high-frequency messages so they don't flood the data channel.
+    // AIM/MOVE/SYNC: max 1 per 100 ms.
     const HF = { AIM: 1, MOVE: 1, SYNC: 1 };
     if (HF[data.type]) {
       const now = Date.now();
@@ -1378,13 +1677,13 @@ export class GameScene extends Phaser.Scene {
       case 'MOVE':
         worm.vx = data.dir === 'right' ? MOVE_SPEED : -MOVE_SPEED;
         worm.facing = data.dir === 'right' ? 1 : -1;
+        if (data.x !== undefined) { worm.x = data.x; worm.y = data.y; }
         break;
 
       case 'JUMP':
-        if (worm.grounded) {
-          worm.vy = JUMP_FORCE;
-          worm.grounded = false;
-        }
+        if (data.x !== undefined) { worm.x = data.x; worm.y = data.y; }
+        worm.vy = JUMP_FORCE;
+        worm.grounded = false;
         break;
 
       case 'AIM':
@@ -1393,20 +1692,37 @@ export class GameScene extends Phaser.Scene {
 
       case 'FIRE': {
         const weapon = WEAPONS[data.weapon] || WEAPONS.bazooka;
-        const vx = Math.cos(data.angle) * weapon.speed;
-        const vy = Math.sin(data.angle) * weapon.speed;
         this.aimAngle = data.angle;
         // Apply authoritative wind from sender so trajectories are identical
         if (data.wind !== undefined) this.wind = data.wind;
-        this._createProjectile(data.x, data.y, vx, vy, weapon, this.currentTeamIndex);
+
+        if (weapon.isAirstrike) {
+          const targetX = data.x + Math.cos(data.angle) * 200;
+          this._doAirstrike(targetX, weapon, this.currentTeamIndex);
+        } else if (weapon.pellets) {
+          // Reproduce shotgun pellets with same spread seed
+          for (let p = 0; p < weapon.pellets; p++) {
+            const spread = (Math.random() - 0.5) * weapon.spread;
+            const angle = data.angle + spread;
+            const vx = Math.cos(angle) * weapon.speed;
+            const vy = Math.sin(angle) * weapon.speed;
+            this._createProjectile(data.x, data.y, vx, vy, weapon, this.currentTeamIndex);
+          }
+        } else {
+          const vx = Math.cos(data.angle) * weapon.speed;
+          const vy = Math.sin(data.angle) * weapon.speed;
+          this._createProjectile(data.x, data.y, vx, vy, weapon, this.currentTeamIndex);
+        }
         this.fired = true;
         break;
       }
 
-      case 'PLACE_MINE':
-        this._placeMine(data.x, data.y);
+      case 'PLACE_MINE': {
+        const weaponKey = data.weaponKey || 'mine';
+        this._placeMine(data.x, data.y, WEAPONS[weaponKey]);
         this.fired = true;
         break;
+      }
 
       case 'END_TURN':
         this._endTurn();
@@ -1425,6 +1741,23 @@ export class GameScene extends Phaser.Scene {
       case 'STOP':
         worm.vx = 0;
         if (data.x !== undefined) { worm.x = data.x; worm.y = data.y; }
+        break;
+
+      case 'HOOK_FIRE': {
+        const speed = 18;
+        this._hook.active = true;
+        this._hook.attached = false;
+        this._hook.x = data.x;
+        this._hook.y = data.y;
+        this._hook.vx = Math.cos(data.angle) * speed;
+        this._hook.vy = Math.sin(data.angle) * speed;
+        if (!this._hook.sprite) this._hook.sprite = this.add.circle(data.x, data.y, 4, 0xcccccc).setDepth(20);
+        if (!this._hook.ropeGfx) this._hook.ropeGfx = this.add.graphics().setDepth(19);
+        break;
+      }
+
+      case 'HOOK_RELEASE':
+        this._releaseHook();
         break;
     }
   }
