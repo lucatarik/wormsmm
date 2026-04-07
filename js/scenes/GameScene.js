@@ -1019,50 +1019,78 @@ export class GameScene extends Phaser.Scene {
     if (!worm) return;
 
     if (!this._hook.attached) {
-      // Move hook
-      this._hook.vy += 0.3;
-      this._hook.x += this._hook.vx;
-      this._hook.y += this._hook.vy;
+      // Projectile phase
+      this._hook.vy += 0.4;
+      this._hook.x  += this._hook.vx;
+      this._hook.y  += this._hook.vy;
 
       if (this._hook.sprite) this._hook.sprite.setPosition(this._hook.x, this._hook.y);
 
-      // Check terrain attachment
       if (this.isSolid(this._hook.x, this._hook.y) || this._hook.y > WORLD_HEIGHT) {
-        this._hook.attached = true;
-        this._hook.vx = 0;
-        this._hook.vy = 0;
+        this._hook.attached   = true;
+        this._hook.vx         = 0;
+        this._hook.vy         = 0;
+        // Initialise rope length at attachment distance
+        this._hook.ropeLength = Math.hypot(this._hook.x - worm.x, this._hook.y - worm.y);
+        this._hook.ropeLength = Phaser.Math.Clamp(this._hook.ropeLength, 20, 200);
       }
 
-      // Out of bounds
       if (this._hook.x < 0 || this._hook.x > WORLD_WIDTH || this._hook.y < -200) {
         this._releaseHook();
         return;
       }
+      return;
     }
 
-    if (this._hook.attached) {
-      // Swing physics: pull worm toward hook point
-      const dx = this._hook.x - worm.x;
-      const dy = this._hook.y - worm.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist > 10) {
-        const ropeLength = Math.min(dist, 120); // max rope length
-        if (dist > ropeLength) {
-          const pull = (dist - ropeLength) / dist;
-          worm.vx += dx * pull * 0.15;
-          worm.vy += dy * pull * 0.15;
-        }
-        // Damping
-        worm.vx *= 0.98;
-        worm.vy *= 0.98;
+    // ── Attached: rope constraint ──────────────────────────────────────────
+    const dx   = this._hook.x - worm.x;
+    const dy   = this._hook.y - worm.y;
+    const dist = Math.hypot(dx, dy) || 1;
+
+    // UP key → climb (shorten rope), DOWN key → extend
+    if (this.cursors.up.isDown || (this.wasd.up && this.wasd.up.isDown)) {
+      this._hook.ropeLength = Math.max(20, this._hook.ropeLength - 1.5);
+    }
+    if (this.cursors.down && this.cursors.down.isDown) {
+      this._hook.ropeLength = Math.min(200, this._hook.ropeLength + 1.5);
+    }
+
+    // If worm is farther than ropeLength → apply constraint force
+    if (dist > this._hook.ropeLength) {
+      const excess = dist - this._hook.ropeLength;
+      const nx     = dx / dist;
+      const ny     = dy / dist;
+      // Impulse proportional to excess stretch
+      const strength = Math.min(excess * 0.6, 12);
+      const body = worm.body;
+      const vel  = body.getLinearVelocity();
+
+      // Cancel velocity component going away from hook
+      const radialVel = vel.x * nx + vel.y * ny;
+      if (radialVel < 0) {
+        // Going away — project out that component
+        body.setLinearVelocity(planck.Vec2(
+          vel.x - radialVel * nx,
+          vel.y - radialVel * ny,
+        ));
       }
 
-      // Draw rope
-      if (this._hook.ropeGfx) {
-        this._hook.ropeGfx.clear();
-        this._hook.ropeGfx.lineStyle(1.5, 0xaaaaaa, 0.9);
-        this._hook.ropeGfx.lineBetween(worm.x, worm.y, this._hook.x, this._hook.y);
-      }
+      // Apply pull impulse toward hook
+      body.applyLinearImpulse(
+        planck.Vec2(nx * strength * body.getMass() * INV_PTM * PHYS_FPS,
+                    ny * strength * body.getMass() * INV_PTM * PHYS_FPS),
+        body.getWorldCenter(), true,
+      );
+
+      worm.vx = body.getLinearVelocity().x * PTM / PHYS_FPS;
+      worm.vy = body.getLinearVelocity().y * PTM / PHYS_FPS;
+    }
+
+    // Draw rope
+    if (this._hook.ropeGfx) {
+      this._hook.ropeGfx.clear();
+      this._hook.ropeGfx.lineStyle(1.5, 0xaaaaaa, 0.9);
+      this._hook.ropeGfx.lineBetween(worm.x, worm.y, this._hook.x, this._hook.y);
     }
   }
 
@@ -1352,8 +1380,9 @@ export class GameScene extends Phaser.Scene {
     for (const worm of this.allWorms) {
       if (!worm.alive) continue;
 
-      const body = worm.body;
-      const vel  = body.getLinearVelocity();
+      const body     = worm.body;
+      const vel      = body.getLinearVelocity();
+      const isActive = worm === this._getActiveWorm();
 
       // ── Apply gravity force ──
       body.applyForce(
@@ -1361,7 +1390,12 @@ export class GameScene extends Phaser.Scene {
         body.getWorldCenter(), true,
       );
 
-      // ── Apply horizontal velocity from worm.vx (px/frame → m/s) ──
+      // ── Horizontal velocity ──
+      // Non-active worms: damp vx so they don't slide forever from stale SYNC data
+      if (!isActive) {
+        worm.vx *= 0.75;
+        if (Math.abs(worm.vx) < 0.05) worm.vx = 0;
+      }
       body.setLinearVelocity(planck.Vec2(worm.vx * INV_PTM * PHYS_FPS, vel.y));
 
       // ── Read back position (Planck step already ran in update()) ──
@@ -1371,7 +1405,7 @@ export class GameScene extends Phaser.Scene {
       const newY = pos.y * PTM;
 
       // ── Terrain collision (pixel-precise, overrides Planck for terrain) ──
-      const feetY = newY + WORM_RADIUS;
+      const feetY = newY + WORM_RADIUS + 1;  // +1 pixel tolerance
       if (this.isSolid(newX, feetY)) {
         let surfaceY = Math.floor(feetY);
         while (surfaceY > 0 && this.isSolid(newX, surfaceY - 1)) surfaceY--;
@@ -1411,6 +1445,13 @@ export class GameScene extends Phaser.Scene {
 
       // Read back vy for network sync
       worm.vy = body.getLinearVelocity().y * PTM / PHYS_FPS;
+
+      // ── Grounded: multi-point foot check for reliability ──
+      worm.grounded = (
+        this.isSolid(worm.x, worm.y + WORM_RADIUS + 2) ||
+        this.isSolid(worm.x - 5, worm.y + WORM_RADIUS + 2) ||
+        this.isSolid(worm.x + 5, worm.y + WORM_RADIUS + 2)
+      );
 
       // ── Fell off bottom ──
       if (worm.y > WORLD_HEIGHT + 50) this._killWorm(worm, true);

@@ -1,5 +1,5 @@
-const CACHE_NAME = 'worms-online-v5';
-const STATIC_CACHE = 'worms-static-v5';
+const CACHE_NAME = 'worms-online-v6';
+const STATIC_CACHE = 'worms-static-v6';
 
 const STATIC_ASSETS = [
   './',
@@ -18,7 +18,7 @@ const STATIC_ASSETS = [
   './icons/icon-512.png',
 ];
 
-const CDN_CACHE = 'worms-cdn-v5';
+const CDN_CACHE = 'worms-cdn-v6';
 const CDN_ASSETS = [
   'https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js',
@@ -111,23 +111,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // JS/CSS/Images: cache-first with network fallback
+  // JS/CSS/Images: network-first (ensures fresh code after deploys), cache fallback
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
+    fetch(request)
+      .then((response) => {
         if (response.ok) {
-          // Clone synchronously before any async operation to avoid
-          // "Response body is already used" error
           const cloned = response.clone();
           caches.open(STATIC_CACHE).then((cache) => cache.put(request, cloned));
         }
         return response;
-      }).catch(() => {
-        if (request.headers.get('accept')?.includes('text/html')) {
-          return caches.match('./index.html');
-        }
-      });
-    })
+      })
+      .catch(() => caches.match(request))
   );
 });
