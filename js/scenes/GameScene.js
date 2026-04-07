@@ -109,9 +109,18 @@ const WEAPONS = {
     isHook: true,
     ammo: Infinity,
   },
+  bat: {
+    name: 'Baseball Bat',
+    key: 'bat',
+    isMelee: true,
+    range: 48,       // px
+    damage: 30,
+    knockback: 16,   // px/frame — strong horizontal launch
+    ammo: Infinity,
+  },
 };
 
-const WEAPON_ORDER = ['bazooka', 'grenade', 'cluster', 'shotgun', 'airstrike', 'dynamite', 'mine'];
+const WEAPON_ORDER = ['bazooka', 'grenade', 'cluster', 'shotgun', 'airstrike', 'dynamite', 'mine', 'bat'];
 
 /**
  * GameScene - The main gameplay scene with terrain, worms, weapons, physics, and networking.
@@ -575,6 +584,7 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-FIVE',  () => { if (this._isMyTurn()) this._selectWeapon(4); });
     this.input.keyboard.on('keydown-SIX',   () => { if (this._isMyTurn()) this._selectWeapon(5); });
     this.input.keyboard.on('keydown-SEVEN', () => { if (this._isMyTurn()) this._selectWeapon(6); });
+    this.input.keyboard.on('keydown-EIGHT', () => { if (this._isMyTurn()) this._selectWeapon(7); });
 
     // G key for hook
     this.input.keyboard.on('keydown-G', () => {
@@ -761,6 +771,13 @@ export class GameScene extends Phaser.Scene {
     const weapon = this.currentWeapon;
     if (!weapon || weapon.isHook) return;
 
+    if (weapon.isMelee) {
+      if (ammo !== Infinity) this.weaponAmmo[weapon.key]--;
+      this.fired = true;
+      this._swingBat(worm, weapon);
+      return;
+    }
+
     const ammo = this.weaponAmmo[weapon.key];
     if (ammo !== Infinity && ammo <= 0) {
       this._selectWeapon(0); // Fall back to bazooka
@@ -789,7 +806,7 @@ export class GameScene extends Phaser.Scene {
     } else if (weapon.placed) {
       this._placeMine(worm.x, worm.y, weapon);
       this._sendAction({ type: 'PLACE_MINE', x: worm.x, y: worm.y, weaponKey: weapon.key });
-      this.time.delayedCall(500, () => this._endTurn());
+      this.time.delayedCall(4000, () => { if (this.turnActive && this.fired) this._endTurn(); });
     } else if (weapon.pellets) {
       // Shotgun: generate angles once, send them so both clients use identical spread
       const pelletAngles = [];
@@ -837,6 +854,56 @@ export class GameScene extends Phaser.Scene {
         this._createProjectile(bx, by, 0, 8, weapon, ownerTeamIndex);
       });
     }
+  }
+
+  _swingBat(worm, weapon) {
+    const dir   = worm.facing;
+    const hitX  = worm.x + dir * weapon.range;
+    const hitY  = worm.y;
+
+    // Visual arc effect
+    const gfx = this.add.graphics().setDepth(60);
+    for (let a = 0; a <= 8; a++) {
+      const t   = a / 8;
+      const ang = (dir > 0 ? -0.8 : Math.PI + 0.8) + t * (dir > 0 ? 1.6 : -1.6);
+      const sx  = worm.x + Math.cos(ang) * weapon.range;
+      const sy  = worm.y + Math.sin(ang) * weapon.range * 0.5;
+      gfx.fillStyle(0xccaa44, 1 - t * 0.7);
+      gfx.fillRect(sx - 3, sy - 3, 6, 6);
+    }
+    this.time.delayedCall(250, () => gfx.destroy());
+
+    // Check for worms in range
+    let hit = false;
+    for (const target of this.allWorms) {
+      if (!target.alive) continue;
+      if (target.teamIndex === worm.teamIndex) continue;
+      const dist = Math.hypot(hitX - target.x, hitY - target.y);
+      if (dist < weapon.range * 1.3) {
+        // Strong horizontal knockback
+        const kbMs = weapon.knockback * INV_PTM * PHYS_FPS;
+        const kbUp = 6 * INV_PTM * PHYS_FPS;
+        target.body.setLinearVelocity(planck.Vec2(dir * kbMs, -kbUp));
+        target.vx = dir * weapon.knockback;
+        target.vy = -6;
+        this._applyDamageToWorm(target, weapon.damage, true);
+        hit = true;
+      }
+    }
+
+    // "Whoosh" / "CRACK" text
+    const label = hit ? 'CRACK!' : 'Whoosh';
+    const color = hit ? '#ffee44' : '#88aacc';
+    const fx = this.add.text(hitX, worm.y - 20, label, {
+      fontFamily: 'Arial Black', fontSize: '16px', color,
+      stroke: '#000', strokeThickness: 3,
+    }).setDepth(65).setOrigin(0.5);
+    this.tweens.add({ targets: fx, y: fx.y - 40, alpha: 0, duration: 800, onComplete: () => fx.destroy() });
+
+    this._sendAction({ type: 'BAT_SWING', x: worm.x, y: worm.y, facing: dir });
+
+    // End turn after 4 s
+    this.time.delayedCall(4000, () => { if (this.turnActive && this.fired) this._endTurn(); });
   }
 
   _createProjectile(x, y, vx, vy, weapon, ownerTeamIndex) {
@@ -1451,8 +1518,8 @@ export class GameScene extends Phaser.Scene {
       this.cameraFollowing = true;
     }
 
-    // End turn after all projectiles settle
-    this.time.delayedCall(600, () => {
+    // End turn 4 s after all projectiles have settled
+    this.time.delayedCall(4000, () => {
       if (this.turnActive && this.fired && !this.projectiles.some(p => p.alive)) {
         this._endTurn();
       }
@@ -1948,6 +2015,26 @@ export class GameScene extends Phaser.Scene {
       case 'HOOK_RELEASE':
         this._releaseHook();
         break;
+
+      case 'BAT_SWING': {
+        const sw   = WEAPONS.bat;
+        const dir  = data.facing;
+        const hitX = data.x + dir * sw.range;
+        for (const target of this.allWorms) {
+          if (!target.alive || target.teamIndex === this.currentTeamIndex) continue;
+          const dist = Math.hypot(hitX - target.x, data.y - target.y);
+          if (dist < sw.range * 1.3) {
+            const kbMs = sw.knockback * INV_PTM * PHYS_FPS;
+            const kbUp = 6 * INV_PTM * PHYS_FPS;
+            target.body.setLinearVelocity(planck.Vec2(dir * kbMs, -kbUp));
+            target.vx = dir * sw.knockback;
+            target.vy = -6;
+            this._applyDamageToWorm(target, sw.damage, true);
+          }
+        }
+        this.fired = true;
+        break;
+      }
     }
   }
 

@@ -21,35 +21,20 @@
 // Leave empty to fall back to the free PeerJS cloud.
 const CF_WORKER_HOST = '';   // ← fill in after deploying the CF Worker
 
+// TURN servers improve NAT traversal for players behind symmetric NAT.
+// Open Relay Project provides free TURN servers.
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80',                username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443',               username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+];
+
 export const PEER_CONFIG = CF_WORKER_HOST
-  ? {
-      host:   CF_WORKER_HOST,
-      port:    443,
-      path:   '/peerjs',
-      secure:  true,
-      key:    'wormsmm',
-      debug:   0,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
-      },
-    }
-  : {
-      // Free PeerJS cloud — fine for development / testing
-      host:   '0.peerjs.com',
-      port:    443,
-      path:   '/',
-      secure:  true,
-      debug:   0,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
-      },
-    };
+  ? { host: CF_WORKER_HOST, port: 443, path: '/peerjs', secure: true, key: 'wormsmm', debug: 0, config: { iceServers: ICE_SERVERS } }
+  : { host: '0.peerjs.com',  port: 443, path: '/',       secure: true,                debug: 0, config: { iceServers: ICE_SERVERS } };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function generateRoomId() {
@@ -61,11 +46,17 @@ function createTeams(hostName, guestName = 'Player 2') {
   return [
     {
       id: 'team-0', name: hostName, color: 0xff4444,
-      worms: [{ id: 'w0-0', name: 'Walker' }, { id: 'w0-1', name: 'Runner' }],
+      worms: [
+        { id: 'w0-0', name: 'Walker' }, { id: 'w0-1', name: 'Runner' },
+        { id: 'w0-2', name: 'Digger' }, { id: 'w0-3', name: 'Basher' },
+      ],
     },
     {
       id: 'team-1', name: guestName, color: 0x4488ff,
-      worms: [{ id: 'w1-0', name: 'Jumper' }, { id: 'w1-1', name: 'Blaster' }],
+      worms: [
+        { id: 'w1-0', name: 'Jumper' }, { id: 'w1-1', name: 'Blaster' },
+        { id: 'w1-2', name: 'Ninja'  }, { id: 'w1-3', name: 'Sniper'  },
+      ],
     },
   ];
 }
@@ -182,7 +173,8 @@ export class P2PSync {
       peer.on('error', done);
 
       peer.on('open', () => {
-        const conn = peer.connect(hostPeerId, { reliable: true });
+        // Force JSON serialization — avoids msgpack binary encoding issues
+        const conn = peer.connect(hostPeerId, { reliable: true, serialization: 'json' });
         this._conn = conn;
         conn.on('error', done);
 

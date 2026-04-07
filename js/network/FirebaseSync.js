@@ -34,9 +34,15 @@ const _db = getDatabase(_firebaseApp);
 function createTeams(hostName, guestName = 'Player 2') {
   return [
     { id: 'team-0', name: hostName, color: 0xff4444,
-      worms: [{ id: 'w0-0', name: 'Walker' }, { id: 'w0-1', name: 'Runner' }] },
+      worms: [
+        { id: 'w0-0', name: 'Walker' }, { id: 'w0-1', name: 'Runner' },
+        { id: 'w0-2', name: 'Digger' }, { id: 'w0-3', name: 'Basher' },
+      ] },
     { id: 'team-1', name: guestName, color: 0x4488ff,
-      worms: [{ id: 'w1-0', name: 'Jumper' }, { id: 'w1-1', name: 'Blaster' }] },
+      worms: [
+        { id: 'w1-0', name: 'Jumper' }, { id: 'w1-1', name: 'Blaster' },
+        { id: 'w1-2', name: 'Ninja'  }, { id: 'w1-3', name: 'Sniper'  },
+      ] },
   ];
 }
 

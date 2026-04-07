@@ -162,13 +162,14 @@ export class UIScene extends Phaser.Scene {
 
     // ── Weapon selector bar (bottom center) ─────────────
     const WEAP_DEFS = [
-      { key: 'bazooka', label: 'Bazooka',  slot: 1 },
-      { key: 'grenade', label: 'Grenade',  slot: 2 },
-      { key: 'cluster', label: 'Cluster',  slot: 3 },
-      { key: 'shotgun', label: 'Shotgun',  slot: 4 },
+      { key: 'bazooka',  label: 'Bazooka', slot: 1 },
+      { key: 'grenade',  label: 'Grenade', slot: 2 },
+      { key: 'cluster',  label: 'Cluster', slot: 3 },
+      { key: 'shotgun',  label: 'Shotgun', slot: 4 },
       { key: 'airstrike',label: 'Strike',  slot: 5 },
-      { key: 'dynamite', label: 'Dynamite',slot: 6 },
-      { key: 'mine',    label: 'Mine',     slot: 7 },
+      { key: 'dynamite', label: 'Dynmite', slot: 6 },
+      { key: 'mine',     label: 'Mine',    slot: 7 },
+      { key: 'bat',      label: 'Bat',     slot: 8 },
     ];
     const barY   = H - 4;
     const slotW  = Math.min(92, (W - 20) / WEAP_DEFS.length);
@@ -195,6 +196,7 @@ export class UIScene extends Phaser.Scene {
       'MClick / G : hook',
       'W / S : aim',
       'Q / E : cycle weapon',
+      '1-8 : select weapon',
       'Scroll : zoom',
     ];
     const lx = W - 6;
@@ -356,7 +358,7 @@ export class UIScene extends Phaser.Scene {
     const NAMES = {
       bazooka: 'BAZOOKA', grenade: 'GRENADE', cluster: 'CLUSTER',
       shotgun: 'SHOTGUN', airstrike: 'AIR STRIKE', dynamite: 'DYNAMITE',
-      mine: 'MINE', hook: 'HOOK',
+      mine: 'MINE', bat: 'BASEBALL BAT', hook: 'HOOK',
     };
     const ICONS = {
       bazooka: 'weapon-bazooka', grenade: 'weapon-grenade',
