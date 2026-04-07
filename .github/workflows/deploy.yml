@@ -27,13 +27,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Inject Firebase config from secrets (optional)
+        if: ${{ secrets.FIREBASE_API_KEY != '' }}
+        env:
+          FB_API_KEY:    ${{ secrets.FIREBASE_API_KEY }}
+          FB_AUTH_DOM:   ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FB_DB_URL:     ${{ secrets.FIREBASE_DATABASE_URL }}
+          FB_PROJECT:    ${{ secrets.FIREBASE_PROJECT_ID }}
+          FB_BUCKET:     ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FB_SENDER:     ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          FB_APP_ID:     ${{ secrets.FIREBASE_APP_ID }}
+        run: |
+          python3 - <<'EOF'
+          import os, re, pathlib
+
+          src = pathlib.Path('js/network/FirebaseSync.js').read_text()
+          replacement = f"""const FIREBASE_CONFIG = {{
+            apiKey:            '{os.environ["FB_API_KEY"]}',
+            authDomain:        '{os.environ["FB_AUTH_DOM"]}',
+            databaseURL:       '{os.environ["FB_DB_URL"]}',
+            projectId:         '{os.environ["FB_PROJECT"]}',
+            storageBucket:     '{os.environ["FB_BUCKET"]}',
+            messagingSenderId: '{os.environ["FB_SENDER"]}',
+            appId:             '{os.environ["FB_APP_ID"]}',
+          }};"""
+          patched = re.sub(
+            r'const FIREBASE_CONFIG\s*=\s*\{[^}]*\};',
+            replacement,
+            src,
+            flags=re.DOTALL,
+          )
+          pathlib.Path('js/network/FirebaseSync.js').write_text(patched)
+          print('Firebase config injected from secrets.')
+          EOF
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload the frontend root (excludes server directory)
           path: '.'
 
       - name: Deploy to GitHub Pages

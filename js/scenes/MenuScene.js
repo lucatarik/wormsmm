@@ -1,4 +1,4 @@
-import { PeerJSSync } from '../network/PeerJSSync.js';
+import { P2PSync } from '../network/P2PSync.js';
 
 const LS_NAME_KEY = 'worms_player_name';
 const BASE_URL    = 'https://lucatarik.github.io/wormsmm/';
@@ -26,7 +26,7 @@ export class MenuScene extends Phaser.Scene {
 
     // Pre-generate a room ID for the host so the share link is known immediately
     if (!this._isGuest) {
-      this._pendingRoomId = PeerJSSync.generateRoomId();
+      this._pendingRoomId = P2PSync.generateRoomId();
     }
 
     this._drawBg();
@@ -142,7 +142,7 @@ export class MenuScene extends Phaser.Scene {
     const name = this._nameEl?.value?.trim() || 'Player1';
     localStorage.setItem(LS_NAME_KEY, name);
 
-    const sync = new PeerJSSync();
+    const sync = new P2PSync();
     try {
       this._showWaitOverlay(this._pendingRoomId, 'Waiting for opponent…', () => {
         sync.disconnect();
@@ -217,7 +217,7 @@ export class MenuScene extends Phaser.Scene {
     const name = this._nameEl?.value?.trim() || 'Player2';
     localStorage.setItem(LS_NAME_KEY, name);
 
-    const sync = new PeerJSSync();
+    const sync = new P2PSync();
     this._showWaitOverlay(this._roomParam, 'Connecting to game…', () => {
       sync.disconnect();
       this._hideWaitOverlay();

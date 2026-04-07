@@ -3,8 +3,13 @@ import { mulberry32 } from '../utils/rng.js';
 
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 500;
-const GRAVITY = 0.32;
+const GRAVITY = 0.32;         // px/frame (legacy, used for networking compat)
 const WORM_RADIUS = 10;
+const PTM      = 30;          // pixels → metres
+const INV_PTM  = 1 / PTM;
+const PHYS_FPS = 60;          // reference fps for px/frame ↔ m/s conversions
+// Planck gravity (m/s²) = GRAVITY px/frame² → m/s² = GRAVITY * PHYS_FPS² * INV_PTM
+const PLANCK_G = GRAVITY * PHYS_FPS * PHYS_FPS * INV_PTM; // ≈ 38.4 m/s²
 const TURN_DURATION = 30000; // ms
 const MOVE_SPEED = 2.2;
 const JUMP_FORCE = -7.5;
@@ -130,6 +135,7 @@ export class GameScene extends Phaser.Scene {
   create() {
     this._setupWorld();
     this._setupTerrain();
+    this._buildTerrainBody();
     this._spawnWorms();
     this._setupCamera();
     this._setupInput();
@@ -159,6 +165,10 @@ export class GameScene extends Phaser.Scene {
 
   _setupWorld() {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+
+    // Planck physics world — no global gravity (applied manually per body)
+    this.physWorld = planck.World(planck.Vec2(0, 0));
+    this._terrainBody = null;
 
     // Sky background
     const sky = this.add.graphics();
@@ -297,6 +307,53 @@ export class GameScene extends Phaser.Scene {
     }
 
     this._drawTerrainToCanvas();
+    // Rebuild Planck terrain body after destruction
+    if (this.physWorld) this._buildTerrainBody();
+  }
+
+  /**
+   * Build (or rebuild) a static Planck body matching the current heightmap.
+   * Called once on create and again after every explosion that digs terrain.
+   */
+  _buildTerrainBody() {
+    if (this._terrainBody) {
+      this.physWorld.destroyBody(this._terrainBody);
+      this._terrainBody = null;
+    }
+
+    const body = this.physWorld.createBody({ type: 'static' });
+
+    // Sample heightmap every 6 px → ≈400 vertices (well within Planck limits)
+    const STEP = 6;
+    const verts = [];
+    for (let x = 0; x <= WORLD_WIDTH; x += STEP) {
+      const xi = Math.min(x, WORLD_WIDTH - 1);
+      verts.push(planck.Vec2(xi * INV_PTM, this.heightmap[xi] * INV_PTM));
+    }
+
+    // Open chain for the terrain surface
+    body.createFixture({ shape: planck.Chain(verts, false), friction: 0.5 });
+
+    // Solid floor
+    body.createFixture({
+      shape: planck.Edge(
+        planck.Vec2(0, WORLD_HEIGHT * INV_PTM),
+        planck.Vec2(WORLD_WIDTH * INV_PTM, WORLD_HEIGHT * INV_PTM),
+      ), friction: 0.5,
+    });
+
+    // Side walls
+    body.createFixture({
+      shape: planck.Edge(planck.Vec2(0, 0), planck.Vec2(0, WORLD_HEIGHT * INV_PTM)),
+    });
+    body.createFixture({
+      shape: planck.Edge(
+        planck.Vec2(WORLD_WIDTH * INV_PTM, 0),
+        planck.Vec2(WORLD_WIDTH * INV_PTM, WORLD_HEIGHT * INV_PTM),
+      ),
+    });
+
+    this._terrainBody = body;
   }
 
   // ─────────────────────────────────────────────
@@ -330,6 +387,20 @@ export class GameScene extends Phaser.Scene {
         const textureKey = ti === 0 ? 'worm-red' : 'worm-blue';
         const sprite = this.add.image(spawnX, spawnY, textureKey).setDepth(10);
 
+        // Planck rigid body for this worm
+        const wormBody = this.physWorld.createBody({
+          type: 'dynamic',
+          position: planck.Vec2(spawnX * INV_PTM, spawnY * INV_PTM),
+          fixedRotation: true,
+          linearDamping: 0.1,
+        });
+        wormBody.createFixture({
+          shape: planck.Circle(WORM_RADIUS * INV_PTM),
+          density: 1,
+          friction: 0.5,
+          restitution: 0.05,
+        });
+
         const worm = {
           id: wormData.id,
           name: wormData.name,
@@ -351,6 +422,7 @@ export class GameScene extends Phaser.Scene {
           healthLabel: null,
           turnIndicator: null,
           wormIndex: wi,
+          body: wormBody,     // Planck body reference
         };
 
         this._createWormUI(worm);
@@ -579,6 +651,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.cursors.up.isDown && worm.grounded) {
+      // Apply jump via Planck impulse
+      const jumpVel = JUMP_FORCE * INV_PTM * PHYS_FPS;
+      const v = worm.body.getLinearVelocity();
+      worm.body.setLinearVelocity(planck.Vec2(v.x, jumpVel));
       worm.vy = JUMP_FORCE;
       worm.grounded = false;
       jumped = true;
@@ -679,10 +755,12 @@ export class GameScene extends Phaser.Scene {
       this._sendAction({ type: 'PLACE_MINE', x: worm.x, y: worm.y, weaponKey: weapon.key });
       this.time.delayedCall(500, () => this._endTurn());
     } else if (weapon.pellets) {
-      // Shotgun: fire multiple pellets with spread
+      // Shotgun: generate angles once, send them so both clients use identical spread
+      const pelletAngles = [];
       for (let p = 0; p < weapon.pellets; p++) {
-        const spread = (Math.random() - 0.5) * weapon.spread;
-        const angle = this.aimAngle + spread;
+        pelletAngles.push(this.aimAngle + (Math.random() - 0.5) * weapon.spread);
+      }
+      for (const angle of pelletAngles) {
         const vx = Math.cos(angle) * weapon.speed;
         const vy = Math.sin(angle) * weapon.speed;
         this._createProjectile(worm.x, worm.y, vx, vy, weapon, worm.teamIndex);
@@ -694,6 +772,7 @@ export class GameScene extends Phaser.Scene {
         x: worm.x,
         y: worm.y,
         wind: this.wind,
+        pelletAngles,
       });
     } else {
       const vx = Math.cos(this.aimAngle) * weapon.speed;
@@ -727,6 +806,23 @@ export class GameScene extends Phaser.Scene {
   _createProjectile(x, y, vx, vy, weapon, ownerTeamIndex) {
     const sprite = this.add.image(x, y, weapon.projectileKey).setDepth(15);
 
+    // Planck dynamic body for projectile
+    const projBody = this.physWorld.createBody({
+      type: 'dynamic',
+      position: planck.Vec2(x * INV_PTM, y * INV_PTM),
+      bullet: true,                 // CCD — prevents tunnelling at high speed
+      gravityScale: 0,              // manual gravity applied per step
+    });
+    projBody.createFixture({
+      shape: planck.Circle(4 * INV_PTM),
+      density: 0.2,
+      restitution: 0.3,
+      friction: 0.2,
+      isSensor: true,               // sensor — collision detection only, no physics response
+    });
+    // Set initial velocity (px/frame → m/s)
+    projBody.setLinearVelocity(planck.Vec2(vx * INV_PTM * PHYS_FPS, vy * INV_PTM * PHYS_FPS));
+
     const proj = {
       x, y, vx, vy,
       weapon,
@@ -735,13 +831,11 @@ export class GameScene extends Phaser.Scene {
       alive: true,
       fuseTimer: weapon.fuse ? this.time.now + weapon.fuse : null,
       trail: [],
+      body: projBody,
     };
 
     this.projectiles.push(proj);
-
-    // Start camera tracking projectile
     this.trackedProjectile = proj;
-
     return proj;
   }
 
@@ -1129,6 +1223,10 @@ export class GameScene extends Phaser.Scene {
     this._handleMovementInput();
     this._updateCameraEdgeScroll();
     this._updateHook();
+
+    // Step Planck physics (capped to avoid spiral of death)
+    this.physWorld.step(Math.min(delta / 1000, 1 / 30));
+
     this._updateWorms(delta);
     this._updateProjectiles(delta);
     this._updateMines(time);
@@ -1151,54 +1249,69 @@ export class GameScene extends Phaser.Scene {
     for (const worm of this.allWorms) {
       if (!worm.alive) continue;
 
-      // Gravity
-      worm.vy += GRAVITY;
+      const body = worm.body;
+      const vel  = body.getLinearVelocity();
 
-      // Move
-      worm.x += worm.vx;
-      worm.y += worm.vy;
+      // ── Apply gravity force ──
+      body.applyForce(
+        planck.Vec2(0, PLANCK_G * body.getMass()),
+        body.getWorldCenter(), true,
+      );
 
-      // Terrain collision (feet at worm.y + WORM_RADIUS)
-      const feetY = worm.y + WORM_RADIUS;
-      if (this.isSolid(worm.x, feetY)) {
-        // Find exact surface
+      // ── Apply horizontal velocity from worm.vx (px/frame → m/s) ──
+      body.setLinearVelocity(planck.Vec2(worm.vx * INV_PTM * PHYS_FPS, vel.y));
+
+      // ── Read back position (Planck step already ran in update()) ──
+      const pos  = body.getPosition();
+      const vel2 = body.getLinearVelocity();
+      const newX = pos.x * PTM;
+      const newY = pos.y * PTM;
+
+      // ── Terrain collision (pixel-precise, overrides Planck for terrain) ──
+      const feetY = newY + WORM_RADIUS;
+      if (this.isSolid(newX, feetY)) {
         let surfaceY = Math.floor(feetY);
-        while (surfaceY > 0 && this.isSolid(worm.x, surfaceY - 1)) {
-          surfaceY--;
-        }
+        while (surfaceY > 0 && this.isSolid(newX, surfaceY - 1)) surfaceY--;
         worm.y = surfaceY - WORM_RADIUS;
-        if (worm.vy > 0) {
-          // Landing impact
-          if (worm.vy > 8) {
-            const fallDamage = Math.floor((worm.vy - 8) * 3);
+
+        if (vel2.y > 0) {
+          const prevVyPx = vel2.y * PTM / PHYS_FPS;
+          if (prevVyPx > 8) {
+            const fallDamage = Math.floor((prevVyPx - 8) * 3);
             if (fallDamage > 0) this._applyDamageToWorm(worm, fallDamage, false);
           }
-          worm.vy = 0;
+          body.setLinearVelocity(planck.Vec2(vel2.x * 0.75, 0));
         }
-        worm.vx *= 0.75;
         worm.grounded = true;
       } else {
+        worm.y = newY;
         worm.grounded = false;
       }
 
-      // Side terrain collision
-      if (this.isSolid(worm.x + worm.facing * WORM_RADIUS, worm.y)) {
+      // ── Side terrain collision ──
+      if (this.isSolid(newX + worm.facing * WORM_RADIUS, worm.y)) {
         worm.vx = 0;
-        // Try to step up
-        if (!this.isSolid(worm.x + worm.facing * WORM_RADIUS, worm.y - 8)) {
+        body.setLinearVelocity(planck.Vec2(0, body.getLinearVelocity().y));
+        if (!this.isSolid(newX + worm.facing * WORM_RADIUS, worm.y - 8)) {
           worm.y -= 3;
         }
       }
 
-      // World bounds
-      worm.x = Phaser.Math.Clamp(worm.x, WORM_RADIUS, WORLD_WIDTH - WORM_RADIUS);
-
-      // Fell off bottom = death
-      if (worm.y > WORLD_HEIGHT + 50) {
-        this._killWorm(worm, true);
+      // ── World bounds ──
+      worm.x = Phaser.Math.Clamp(newX, WORM_RADIUS, WORLD_WIDTH - WORM_RADIUS);
+      if (worm.x !== newX) {
+        body.setLinearVelocity(planck.Vec2(0, body.getLinearVelocity().y));
       }
 
-      // Update sprite position
+      // Sync corrected position back to Planck body
+      body.setTransform(planck.Vec2(worm.x * INV_PTM, worm.y * INV_PTM), 0);
+
+      // Read back vy for network sync
+      worm.vy = body.getLinearVelocity().y * PTM / PHYS_FPS;
+
+      // ── Fell off bottom ──
+      if (worm.y > WORLD_HEIGHT + 50) this._killWorm(worm, true);
+
       worm.sprite.setPosition(worm.x, worm.y);
       worm.sprite.setFlipX(worm.facing < 0);
     }
@@ -1212,51 +1325,60 @@ export class GameScene extends Phaser.Scene {
         continue;
       }
 
-      // Save trail point
+      const body = proj.body;
+
+      // ── Apply per-weapon gravity + wind as forces (Planck world stepped below) ──
+      const weapGravMs2 = proj.weapon.gravity * PHYS_FPS * PHYS_FPS * INV_PTM;
+      const windMs2     = this.wind * proj.weapon.windFactor * 0.01 * PHYS_FPS * PHYS_FPS * INV_PTM;
+      body.applyForce(
+        planck.Vec2(windMs2 * body.getMass(), weapGravMs2 * body.getMass()),
+        body.getWorldCenter(), true,
+      );
+
+      // ── Read position from Planck body ──
+      const pos  = body.getPosition();
+      const vel2 = body.getLinearVelocity();
+      proj.x  = pos.x * PTM;
+      proj.y  = pos.y * PTM;
+      proj.vx = vel2.x * PTM / PHYS_FPS;
+      proj.vy = vel2.y * PTM / PHYS_FPS;
+
       proj.trail.push({ x: proj.x, y: proj.y });
       if (proj.trail.length > 12) proj.trail.shift();
 
-      // Wind and gravity
-      proj.vx += this.wind * proj.weapon.windFactor * 0.01;
-      proj.vy += proj.weapon.gravity;
-
-      proj.x += proj.vx;
-      proj.y += proj.vy;
-
-      // Rotate sprite to face velocity direction
       proj.sprite.setRotation(Math.atan2(proj.vy, proj.vx));
       proj.sprite.setPosition(proj.x, proj.y);
-
-      // Draw trail
       this._drawProjectileTrail(proj);
 
-      // Fuse check (grenade/cluster)
+      // ── Fuse ──
       if (proj.weapon.fuse && this.time.now >= proj.fuseTimer) {
         this._explode(proj.x, proj.y, proj.weapon, proj.ownerTeamIndex);
         this._destroyProjectile(proj, i);
         continue;
       }
 
-      // Terrain collision
+      // ── Terrain collision (pixel-precise) ──
       if (this.isSolid(proj.x, proj.y) || proj.y >= WORLD_HEIGHT) {
         this._explode(proj.x, proj.y, proj.weapon, proj.ownerTeamIndex);
         this._destroyProjectile(proj, i);
         continue;
       }
 
-      // Worm collision
+      // ── Worm collision ──
+      let hit = false;
       for (const worm of this.allWorms) {
         if (!worm.alive) continue;
         if (worm.teamIndex === proj.ownerTeamIndex && !proj.weapon.fuse) continue;
-        const dist = Math.hypot(proj.x - worm.x, proj.y - worm.y);
-        if (dist < WORM_RADIUS + 6) {
+        if (Math.hypot(proj.x - worm.x, proj.y - worm.y) < WORM_RADIUS + 6) {
           this._explode(proj.x, proj.y, proj.weapon, proj.ownerTeamIndex);
           this._destroyProjectile(proj, i);
+          hit = true;
           break;
         }
       }
+      if (hit) continue;
 
-      // Out of world bounds
+      // ── Out of bounds ──
       if (proj.x < -100 || proj.x > WORLD_WIDTH + 100 || proj.y < -500) {
         this._destroyProjectile(proj, i);
       }
@@ -1283,8 +1405,10 @@ export class GameScene extends Phaser.Scene {
   _destroyProjectile(proj, index) {
     proj.alive = false;
     proj.sprite.destroy();
-    if (proj.trailGraphics) {
-      proj.trailGraphics.destroy();
+    if (proj.trailGraphics) proj.trailGraphics.destroy();
+    if (proj.body) {
+      try { this.physWorld.destroyBody(proj.body); } catch {}
+      proj.body = null;
     }
     if (this.trackedProjectile === proj) {
       this.trackedProjectile = null;
@@ -1374,10 +1498,19 @@ export class GameScene extends Phaser.Scene {
         const falloff = 1 - Math.max(0, (dist - WORM_RADIUS) / radius);
         const dmg = Math.round(weapon.damage * falloff);
         if (dmg > 0) {
-          // Knockback
-          const angle = Math.atan2(worm.y - cy, worm.x - cx);
-          worm.vx += Math.cos(angle) * falloff * 8;
-          worm.vy += Math.sin(angle) * falloff * 8 - 3;
+          const angle  = Math.atan2(worm.y - cy, worm.x - cx);
+          const kbPx   = falloff * 8;
+          // Knockback via Planck impulse
+          const kbX = Math.cos(angle) * kbPx * INV_PTM * PHYS_FPS;
+          const kbY = (Math.sin(angle) * kbPx - 3) * INV_PTM * PHYS_FPS;
+          worm.body.applyLinearImpulse(
+            planck.Vec2(kbX * worm.body.getMass(), kbY * worm.body.getMass()),
+            worm.body.getWorldCenter(), true,
+          );
+          // Keep worm.vx/vy in sync for network
+          const v = worm.body.getLinearVelocity();
+          worm.vx = v.x * PTM / PHYS_FPS;
+          worm.vy = v.y * PTM / PHYS_FPS;
           this._applyDamageToWorm(worm, dmg, true);
         }
       }
@@ -1477,6 +1610,11 @@ export class GameScene extends Phaser.Scene {
     worm.health = 0;
     worm.sprite.setAlpha(0.3);
     worm.sprite.setTint(0x444444);
+    // Remove from physics world
+    if (worm.body) {
+      try { this.physWorld.destroyBody(worm.body); } catch {}
+      worm.body = null;
+    }
 
     // Death animation
     if (!drowned) {
@@ -1677,11 +1815,22 @@ export class GameScene extends Phaser.Scene {
       case 'MOVE':
         worm.vx = data.dir === 'right' ? MOVE_SPEED : -MOVE_SPEED;
         worm.facing = data.dir === 'right' ? 1 : -1;
-        if (data.x !== undefined) { worm.x = data.x; worm.y = data.y; }
+        if (data.x !== undefined) {
+          worm.x = data.x; worm.y = data.y;
+          worm.body.setTransform(planck.Vec2(data.x * INV_PTM, data.y * INV_PTM), 0);
+        }
         break;
 
       case 'JUMP':
-        if (data.x !== undefined) { worm.x = data.x; worm.y = data.y; }
+        if (data.x !== undefined) {
+          worm.x = data.x; worm.y = data.y;
+          worm.body.setTransform(planck.Vec2(data.x * INV_PTM, data.y * INV_PTM), 0);
+        }
+        {
+          const jumpVel = JUMP_FORCE * INV_PTM * PHYS_FPS;
+          const cv = worm.body.getLinearVelocity();
+          worm.body.setLinearVelocity(planck.Vec2(cv.x, jumpVel));
+        }
         worm.vy = JUMP_FORCE;
         worm.grounded = false;
         break;
@@ -1700,10 +1849,10 @@ export class GameScene extends Phaser.Scene {
           const targetX = data.x + Math.cos(data.angle) * 200;
           this._doAirstrike(targetX, weapon, this.currentTeamIndex);
         } else if (weapon.pellets) {
-          // Reproduce shotgun pellets with same spread seed
-          for (let p = 0; p < weapon.pellets; p++) {
-            const spread = (Math.random() - 0.5) * weapon.spread;
-            const angle = data.angle + spread;
+          // Use authoritative angles from sender for deterministic pellets
+          const angles = data.pelletAngles || Array.from({ length: weapon.pellets },
+            () => data.angle + (Math.random() - 0.5) * weapon.spread);
+          for (const angle of angles) {
             const vx = Math.cos(angle) * weapon.speed;
             const vy = Math.sin(angle) * weapon.speed;
             this._createProjectile(data.x, data.y, vx, vy, weapon, this.currentTeamIndex);
@@ -1729,18 +1878,22 @@ export class GameScene extends Phaser.Scene {
         break;
 
       case 'SYNC':
-        // Authoritative position snapshot from the active player
-        worm.x = data.x;
-        worm.y = data.y;
+        worm.x = data.x; worm.y = data.y;
         worm.vx = data.vx ?? 0;
         worm.vy = data.vy ?? worm.vy;
         worm.facing = data.facing ?? worm.facing;
         if (data.aim !== undefined) this.aimAngle = data.aim;
+        worm.body.setTransform(planck.Vec2(data.x * INV_PTM, data.y * INV_PTM), 0);
+        worm.body.setLinearVelocity(planck.Vec2(worm.vx * INV_PTM * PHYS_FPS, worm.vy * INV_PTM * PHYS_FPS));
         break;
 
       case 'STOP':
         worm.vx = 0;
-        if (data.x !== undefined) { worm.x = data.x; worm.y = data.y; }
+        if (data.x !== undefined) {
+          worm.x = data.x; worm.y = data.y;
+          worm.body.setTransform(planck.Vec2(data.x * INV_PTM, data.y * INV_PTM), 0);
+        }
+        worm.body.setLinearVelocity(planck.Vec2(0, worm.body.getLinearVelocity().y));
         break;
 
       case 'HOOK_FIRE': {

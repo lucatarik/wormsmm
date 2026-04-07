@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Worms — Network Test</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: #eee; font-family: monospace; font-size: 13px; }
+  h1 { text-align: center; padding: 14px; background: #1a1a2e; font-size: 16px; letter-spacing: 2px; }
+  .panels { display: flex; gap: 12px; padding: 12px; height: calc(100vh - 50px); }
+  .panel { flex: 1; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; display: flex; flex-direction: column; padding: 12px; gap: 8px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .host h2 { color: #ff6b6b; }
+  .guest h2 { color: #74b9ff; }
+  input { background: #222; border: 1px solid #444; color: #eee; padding: 6px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; width: 100%; }
+  button { background: #2d2d44; border: 1px solid #555; color: #eee; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 12px; }
+  button:hover { background: #3d3d60; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row input { flex: 1; }
+  .log { flex: 1; overflow-y: auto; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 4px; padding: 8px; font-size: 11px; line-height: 1.7; }
+  .log .ok   { color: #55efc4; }
+  .log .err  { color: #ff7675; }
+  .log .info { color: #74b9ff; }
+  .log .warn { color: #fdcb6e; }
+  .status { font-size: 11px; padding: 4px 8px; border-radius: 4px; background: #222; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; }
+  .badge.connected { background: #00b894; color: #000; }
+  .badge.waiting   { background: #636e72; color: #fff; }
+  .badge.error     { background: #d63031; color: #fff; }
+</style>
+</head>
+<body>
+<h1>WORMS — NETWORK TEST</h1>
+<div class="panels">
+
+  <!-- HOST PANEL -->
+  <div class="panel host">
+    <h2>Host (Player 1)</h2>
+    <div class="row">
+      <input id="host-name" placeholder="Host name" value="HostPlayer">
+      <input id="host-room" placeholder="Room code (blank = random)" style="width:130px">
+    </div>
+    <div class="row">
+      <button id="host-create">Create Room</button>
+      <button id="host-send" disabled>Send SYNC</button>
+      <button id="host-disconnect" disabled>Disconnect</button>
+      <span id="host-badge" class="badge waiting">idle</span>
+    </div>
+    <div class="status">Room: <strong id="host-room-display">—</strong></div>
+    <div class="log" id="host-log"></div>
+  </div>
+
+  <!-- GUEST PANEL -->
+  <div class="panel guest">
+    <h2>Guest (Player 2)</h2>
+    <div class="row">
+      <input id="guest-name" placeholder="Guest name" value="GuestPlayer">
+      <input id="guest-room" placeholder="Room code" style="width:130px">
+    </div>
+    <div class="row">
+      <button id="guest-join">Join Room</button>
+      <button id="guest-send" disabled>Send MOVE</button>
+      <button id="guest-disconnect" disabled>Disconnect</button>
+      <span id="guest-badge" class="badge waiting">idle</span>
+    </div>
+    <div class="status">Room: <strong id="guest-room-display">—</strong></div>
+    <div class="log" id="guest-log"></div>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script type="module">
+import { P2PSync } from './js/network/P2PSync.js';
+
+// ── Logging helpers ──────────────────────────────────────────────────────────
+function ts() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+}
+function log(el, cls, msg) {
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = `[${ts()}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+const hostLog   = (cls, msg) => log(document.getElementById('host-log'),  cls, msg);
+const guestLog  = (cls, msg) => log(document.getElementById('guest-log'), cls, msg);
+
+function setBadge(id, cls, text) {
+  const el = document.getElementById(id);
+  el.className = `badge ${cls}`;
+  el.textContent = text;
+}
+
+// ── Instances ────────────────────────────────────────────────────────────────
+let hostSync  = null;
+let guestSync = null;
+
+// ── HOST ─────────────────────────────────────────────────────────────────────
+document.getElementById('host-create').addEventListener('click', async () => {
+  const name     = document.getElementById('host-name').value.trim() || 'Host';
+  const presetId = document.getElementById('host-room').value.trim() || undefined;
+
+  document.getElementById('host-create').disabled = true;
+  setBadge('host-badge', 'waiting', 'connecting…');
+  hostLog('info', `Creating room as "${name}"…`);
+
+  hostSync = new P2PSync();
+
+  hostSync.on('remote_action', ({ data }) => {
+    hostLog('ok', `← Remote action: ${JSON.stringify(data)}`);
+  });
+  hostSync.on('disconnect', () => {
+    hostLog('warn', 'Guest disconnected.');
+    setBadge('host-badge', 'waiting', 'disconnected');
+  });
+
+  try {
+    const gd = await hostSync.createRoom(name, presetId);
+    hostLog('ok', `Room created: ${gd.roomId}  seed=${gd.seed}`);
+    hostLog('ok', `Teams: ${gd.teams.map(t => t.name).join(' vs ')}`);
+    document.getElementById('host-room-display').textContent = gd.roomId;
+    document.getElementById('guest-room').value = gd.roomId;   // auto-fill for convenience
+    setBadge('host-badge', 'connected', 'connected');
+    document.getElementById('host-send').disabled      = false;
+    document.getElementById('host-disconnect').disabled = false;
+
+    // Auto-send a SYNC test message 1 s after room creation
+    setTimeout(() => {
+      if (hostSync) {
+        hostSync.send({ type: 'action', data: { type: 'SYNC', payload: 'auto-test', from: 'host' } });
+        hostLog('info', '→ Auto-sent SYNC message');
+      }
+    }, 1000);
+  } catch (e) {
+    hostLog('err', `createRoom failed: ${e.message}`);
+    setBadge('host-badge', 'error', 'error');
+    document.getElementById('host-create').disabled = false;
+  }
+});
+
+document.getElementById('host-send').addEventListener('click', () => {
+  if (!hostSync) return;
+  const payload = { type: 'MOVE', x: Math.round(Math.random() * 800), y: 300, from: 'host' };
+  hostSync.send({ type: 'action', data: payload });
+  hostLog('info', `→ Sent: ${JSON.stringify(payload)}`);
+});
+
+document.getElementById('host-disconnect').addEventListener('click', () => {
+  hostSync?.disconnect();
+  hostSync = null;
+  setBadge('host-badge', 'waiting', 'disconnected');
+  document.getElementById('host-send').disabled      = true;
+  document.getElementById('host-disconnect').disabled = true;
+  document.getElementById('host-create').disabled    = false;
+  hostLog('warn', 'Disconnected.');
+});
+
+// ── GUEST ────────────────────────────────────────────────────────────────────
+document.getElementById('guest-join').addEventListener('click', async () => {
+  const name   = document.getElementById('guest-name').value.trim() || 'Guest';
+  const roomId = document.getElementById('guest-room').value.trim();
+  if (!roomId) { guestLog('err', 'Enter a room code first.'); return; }
+
+  document.getElementById('guest-join').disabled = true;
+  setBadge('guest-badge', 'waiting', 'joining…');
+  guestLog('info', `Joining room "${roomId}" as "${name}"…`);
+
+  guestSync = new P2PSync();
+
+  guestSync.on('remote_action', ({ data }) => {
+    guestLog('ok', `← Remote action: ${JSON.stringify(data)}`);
+  });
+  guestSync.on('disconnect', () => {
+    guestLog('warn', 'Host disconnected.');
+    setBadge('guest-badge', 'waiting', 'disconnected');
+  });
+
+  try {
+    const gd = await guestSync.joinRoom(roomId, name);
+    guestLog('ok', `Joined room: ${gd.roomId}  seed=${gd.seed}`);
+    guestLog('ok', `Teams: ${gd.teams.map(t => t.name).join(' vs ')}`);
+    document.getElementById('guest-room-display').textContent = gd.roomId;
+    setBadge('guest-badge', 'connected', 'connected');
+    document.getElementById('guest-send').disabled      = false;
+    document.getElementById('guest-disconnect').disabled = false;
+  } catch (e) {
+    guestLog('err', `joinRoom failed: ${e.message}`);
+    setBadge('guest-badge', 'error', 'error');
+    document.getElementById('guest-join').disabled = false;
+  }
+});
+
+document.getElementById('guest-send').addEventListener('click', () => {
+  if (!guestSync) return;
+  const payload = { type: 'MOVE', x: Math.round(Math.random() * 800), y: 300, from: 'guest' };
+  guestSync.send({ type: 'action', data: payload });
+  guestLog('info', `→ Sent: ${JSON.stringify(payload)}`);
+});
+
+document.getElementById('guest-disconnect').addEventListener('click', () => {
+  guestSync?.disconnect();
+  guestSync = null;
+  setBadge('guest-badge', 'waiting', 'disconnected');
+  document.getElementById('guest-send').disabled      = true;
+  document.getElementById('guest-disconnect').disabled = true;
+  document.getElementById('guest-join').disabled      = false;
+  guestLog('warn', 'Disconnected.');
+});
+</script>
+</body>
+</html>
