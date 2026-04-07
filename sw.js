@@ -71,6 +71,8 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET requests and WebSocket connections
   if (request.method !== 'GET') return;
   if (url.protocol === 'ws:' || url.protocol === 'wss:') return;
+  // Never intercept PeerJS signaling or Firebase WebSocket traffic
+  if (url.hostname === '0.peerjs.com' || url.hostname.endsWith('.firebaseio.com')) return;
 
   // CDN assets: cache-first
   if (
@@ -99,7 +101,8 @@ self.addEventListener('fetch', (event) => {
       fetch(request)
         .then((response) => {
           if (response.ok) {
-            caches.open(STATIC_CACHE).then((cache) => cache.put(request, response.clone()));
+            const cloned = response.clone();
+            caches.open(STATIC_CACHE).then((cache) => cache.put(request, cloned));
           }
           return response;
         })
@@ -114,7 +117,10 @@ self.addEventListener('fetch', (event) => {
       if (cached) return cached;
       return fetch(request).then((response) => {
         if (response.ok) {
-          caches.open(STATIC_CACHE).then((cache) => cache.put(request, response.clone()));
+          // Clone synchronously before any async operation to avoid
+          // "Response body is already used" error
+          const cloned = response.clone();
+          caches.open(STATIC_CACHE).then((cache) => cache.put(request, cloned));
         }
         return response;
       }).catch(() => {

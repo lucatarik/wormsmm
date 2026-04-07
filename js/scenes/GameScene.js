@@ -503,26 +503,34 @@ export class GameScene extends Phaser.Scene {
   }
 
   _updateCameraEdgeScroll() {
+    if (this.cameraPanning) return;
+
+    const cam    = this.cameras.main;
+    const W      = cam.width;
+    const H      = cam.height;
+    const MARGIN = 80;   // px from edge to start scrolling
+    const SPEED  = 7;
+
+    // Worm auto-follow when it's near the edge
     const worm = this._getActiveWorm();
-    if (!worm || !worm.alive || !this.cameraFollowing) return;
+    if (worm?.alive && this.cameraFollowing) {
+      const sx = (worm.x - cam.scrollX) * cam.zoom;
+      const sy = (worm.y - cam.scrollY) * cam.zoom;
+      if (sx < 160) cam.scrollX -= SPEED;
+      else if (sx > W - 160) cam.scrollX += SPEED;
+      if (sy < 120) cam.scrollY -= SPEED;
+      else if (sy > H - 120) cam.scrollY += SPEED;
+    }
 
-    const cam = this.cameras.main;
-    const margin = 180;
-    const speed = 5;
-
-    // Convert worm world coords to screen coords
-    const screenX = (worm.x - cam.scrollX) * cam.zoom;
-    const screenY = (worm.y - cam.scrollY) * cam.zoom;
-    const W = cam.width;
-    const H = cam.height;
-
-    if (screenX < margin) cam.scrollX -= speed;
-    else if (screenX > W - margin) cam.scrollX += speed;
-    if (screenY < margin) cam.scrollY -= speed;
-    else if (screenY > H - margin) cam.scrollY += speed;
+    // Mouse cursor edge-scroll (always active)
+    const ptr = this.input.activePointer;
+    if (ptr) {
+      if (ptr.x < MARGIN)     cam.scrollX -= SPEED;
+      else if (ptr.x > W - MARGIN) cam.scrollX += SPEED;
+    }
 
     // Clamp to world bounds
-    cam.scrollX = Phaser.Math.Clamp(cam.scrollX, 0, WORLD_WIDTH - W / cam.zoom);
+    cam.scrollX = Phaser.Math.Clamp(cam.scrollX, 0, WORLD_WIDTH  - W / cam.zoom);
     cam.scrollY = Phaser.Math.Clamp(cam.scrollY, 0, WORLD_HEIGHT - H / cam.zoom);
   }
 
@@ -600,12 +608,42 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
+    // Disable right-click context menu on canvas
+    this.game.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
     this.input.on('pointerdown', (pointer) => {
-      if (pointer.button === 1) { // Middle mouse
-        this.cameraPanning = true;
-        this.panStartX = pointer.x + this.cameras.main.scrollX;
-        this.panStartY = pointer.y + this.cameras.main.scrollY;
-        this.cameraFollowing = false;
+      // Left click → fire
+      if (pointer.button === 0) {
+        if (this._isMyTurn() && this.turnActive && !this.fired) {
+          const weapon = this.currentWeapon;
+          if (weapon?.isHook) this._fireHook(); else this._fire();
+        }
+      }
+      // Middle click → hook
+      if (pointer.button === 1) {
+        if (this._isMyTurn() && this.turnActive) {
+          this._fireHook();
+        } else {
+          // pan fallback when not in turn
+          this.cameraPanning = true;
+          this.panStartX = pointer.x + this.cameras.main.scrollX;
+          this.panStartY = pointer.y + this.cameras.main.scrollY;
+          this.cameraFollowing = false;
+        }
+      }
+      // Right click → jump
+      if (pointer.button === 2) {
+        if (this._isMyTurn() && this.turnActive && !this.fired) {
+          const worm = this._getActiveWorm();
+          if (worm?.alive && worm.grounded) {
+            const jumpVel = JUMP_FORCE * INV_PTM * PHYS_FPS;
+            const cv = worm.body.getLinearVelocity();
+            worm.body.setLinearVelocity(planck.Vec2(cv.x, jumpVel));
+            worm.vy = JUMP_FORCE;
+            worm.grounded = false;
+            this._sendAction({ type: 'JUMP', x: worm.x, y: worm.y });
+          }
+        }
       }
     });
 
@@ -617,9 +655,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.input.on('pointerup', (pointer) => {
-      if (pointer.button === 1) {
-        this.cameraPanning = false;
-      }
+      if (pointer.button === 1) this.cameraPanning = false;
     });
 
     // Scroll wheel zoom

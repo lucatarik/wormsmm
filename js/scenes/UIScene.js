@@ -160,12 +160,53 @@ export class UIScene extends Phaser.Scene {
       color: '#aaaaaa',
     }).setDepth(202);
 
-    // ── Weapon selector hints ────────────────────────────
-    this.add.text(W / 2, H - 8, '[1] Bazooka  [2] Grenade  [3] Mine', {
-      fontFamily: 'Arial',
-      fontSize: '10px',
-      color: '#556677',
-    }).setOrigin(0.5, 1).setDepth(200);
+    // ── Weapon selector bar (bottom center) ─────────────
+    const WEAP_DEFS = [
+      { key: 'bazooka', label: 'Bazooka',  slot: 1 },
+      { key: 'grenade', label: 'Grenade',  slot: 2 },
+      { key: 'cluster', label: 'Cluster',  slot: 3 },
+      { key: 'shotgun', label: 'Shotgun',  slot: 4 },
+      { key: 'airstrike',label: 'Strike',  slot: 5 },
+      { key: 'dynamite', label: 'Dynamite',slot: 6 },
+      { key: 'mine',    label: 'Mine',     slot: 7 },
+    ];
+    const barY   = H - 4;
+    const slotW  = Math.min(92, (W - 20) / WEAP_DEFS.length);
+    const startX = W / 2 - (slotW * WEAP_DEFS.length) / 2;
+
+    this._weapSlots = {};
+    for (const wd of WEAP_DEFS) {
+      const cx = startX + (wd.slot - 1) * slotW + slotW / 2;
+      const txt = this.add.text(cx, barY,
+        `[${wd.slot}] ${wd.label}`, {
+          fontFamily: 'Arial', fontSize: '9px', color: '#667788',
+        }).setOrigin(0.5, 1).setDepth(200);
+      const ammoTxt = this.add.text(cx, barY - 12,
+        '', { fontFamily: 'Arial Bold', fontSize: '9px', color: '#aaccff' })
+        .setOrigin(0.5, 1).setDepth(201);
+      this._weapSlots[wd.key] = { labelTxt: txt, ammoTxt };
+    }
+
+    // ── Controls legend (bottom right, always visible) ───
+    const legendLines = [
+      '← → : move',
+      'RClick / ↑ : jump',
+      'LClick / Space : fire',
+      'MClick / G : hook',
+      'W / S : aim',
+      'Q / E : cycle weapon',
+      'Scroll : zoom',
+    ];
+    const lx = W - 6;
+    const ly = H - 4 - legendLines.length * 13;
+    const legBg = this.add.graphics().setDepth(199);
+    legBg.fillStyle(0x000000, 0.45);
+    legBg.fillRoundedRect(lx - 112, ly - 4, 118, legendLines.length * 13 + 8, 5);
+    legendLines.forEach((line, i) => {
+      this.add.text(lx - 4, ly + i * 13, line, {
+        fontFamily: 'Arial', fontSize: '9px', color: '#4a6070',
+      }).setOrigin(1, 0).setDepth(200);
+    });
 
     // ── "YOUR TURN" / "WAITING" indicator ───────────────
     this.turnFlash = this.add.text(W / 2, H / 2 - 60, '', {
@@ -312,27 +353,40 @@ export class UIScene extends Phaser.Scene {
   }
 
   _updateWeaponDisplay(weaponKey) {
-    const weaponNames = {
-      bazooka: 'BAZOOKA',
-      grenade: 'GRENADE',
-      mine: 'MINE',
+    const NAMES = {
+      bazooka: 'BAZOOKA', grenade: 'GRENADE', cluster: 'CLUSTER',
+      shotgun: 'SHOTGUN', airstrike: 'AIR STRIKE', dynamite: 'DYNAMITE',
+      mine: 'MINE', hook: 'HOOK',
     };
-    const weaponIcons = {
-      bazooka: 'weapon-bazooka',
-      grenade: 'weapon-grenade',
+    const ICONS = {
+      bazooka: 'weapon-bazooka', grenade: 'weapon-grenade',
       mine: 'weapon-mine',
     };
 
-    this.weaponName.setText(weaponNames[weaponKey] || weaponKey.toUpperCase());
-    this.weaponIcon.setTexture(weaponIcons[weaponKey] || 'weapon-bazooka');
+    this.currentWeapon = weaponKey;
+    this.weaponName.setText(NAMES[weaponKey] || weaponKey.toUpperCase());
+    this.weaponIcon.setTexture(ICONS[weaponKey] || 'weapon-bazooka');
 
-    // Get ammo from GameScene
     const gameScene = this.scene.get('GameScene');
     if (gameScene) {
       const ammo = gameScene.weaponAmmo?.[weaponKey];
       this.weaponAmmoText.setText(
-        ammo === undefined || ammo === Infinity ? 'Ammo: ∞' : `Ammo: ${ammo}`
+        ammo === undefined || ammo === Infinity ? 'Ammo: ∞' : `Ammo: ${ammo}`,
       );
+      // Refresh all slot ammo labels
+      this._refreshWeapSlots(gameScene);
+    }
+  }
+
+  _refreshWeapSlots(gameScene) {
+    if (!this._weapSlots) return;
+    for (const [key, slot] of Object.entries(this._weapSlots)) {
+      const ammo = gameScene?.weaponAmmo?.[key];
+      const label = ammo === undefined || ammo === Infinity ? '∞' : String(ammo);
+      slot.ammoTxt.setText(label);
+      const active = key === this.currentWeapon;
+      slot.labelTxt.setStyle({ color: active ? '#e8c86d' : '#667788' });
+      slot.ammoTxt.setStyle({ color: ammo === 0 ? '#ff4444' : '#aaccff' });
     }
   }
 
@@ -365,9 +419,10 @@ export class UIScene extends Phaser.Scene {
   }
 
   update() {
-    // Sync health bars from GameScene each frame
     const gameScene = this.scene.get('GameScene');
     if (!gameScene || !gameScene.teams) return;
+
+    this._refreshWeapSlots(gameScene);
 
     for (let ti = 0; ti < gameScene.teams.length; ti++) {
       const team = gameScene.teams[ti];
